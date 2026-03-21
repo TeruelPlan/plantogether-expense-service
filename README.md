@@ -1,188 +1,141 @@
 # Expense Service
 
-> Service de gestion du budget partagé et des dépenses
+> Service de gestion du budget partagé et des dépenses de voyage
 
 ## Rôle dans l'architecture
 
-L'Expense Service gère le budget collectif du voyage. Il enregistre toutes les dépenses (hébergement, transport,
-nourriture, activités, divers), calcule automatiquement qui doit rembourser qui, supporte plusieurs devises avec
-conversion en temps réel, et offre des exports en CSV/PDF. Le service minimise le nombre de transactions entre
-participants grâce à un algorithme de règlement optimisé.
+L'Expense Service gère les dépenses du groupe, la répartition des frais et l'algorithme d'équilibrage des comptes.
+Il vérifie l'appartenance au trip via gRPC (TripService.CheckMembership) et récupère la devise de référence via
+TripService.GetTripCurrency pour la gestion multi-devises.
 
 ## Fonctionnalités
 
-- Ajout et suivi des dépenses avec catégories
-- Gestion de la cagnotte partagée (kitty)
-- Calcul automatique des soldes et règlements
-- Support multi-devises avec taux de change en temps réel
-- Algorithme d'optimisation des transactions (minimise les échanges)
-- Upload sécurisé des reçus vers MinIO via presigned URLs
-- Export des données en CSV et PDF
-- Historique complet des transactions
-- Remboursements et ajustements
+- Enregistrement des dépenses avec modes de répartition (EQUAL / CUSTOM / PERCENTAGE)
+- Soft delete des dépenses (`deleted_at`)
+- Algorithme d'équilibrage greedy (minimum de transactions pour N participants)
+- Gestion multi-devises (conversion via API ECB/Fixer dans la devise du trip)
+- Export CSV ou PDF du bilan de dépenses
+- Vérification d'appartenance via gRPC avant chaque opération
 
 ## Endpoints REST
 
-| Méthode | Endpoint                                           | Description                       |
-|---------|----------------------------------------------------|-----------------------------------|
-| POST    | `/api/trips/{tripId}/expenses`                     | Créer une dépense                 |
-| GET     | `/api/trips/{tripId}/expenses`                     | Lister les dépenses               |
-| GET     | `/api/expenses/{expenseId}`                        | Récupérer une dépense             |
-| PUT     | `/api/expenses/{expenseId}`                        | Modifier une dépense (créateur)   |
-| DELETE  | `/api/expenses/{expenseId}`                        | Supprimer une dépense             |
-| GET     | `/api/trips/{tripId}/balance`                      | Calculer les soldes et règlements |
-| PUT     | `/api/trips/{tripId}/expenses/{expenseId}/receipt` | Uploader un reçu                  |
-| GET     | `/api/trips/{tripId}/expenses/export/csv`          | Exporter en CSV                   |
-| GET     | `/api/trips/{tripId}/expenses/export/pdf`          | Exporter en PDF                   |
-| POST    | `/api/trips/{tripId}/kitty`                        | Ajouter à la cagnotte             |
-| GET     | `/api/trips/{tripId}/kitty`                        | Consulter la cagnotte             |
+| Méthode | Endpoint | Description |
+|---------|----------|-------------|
+| POST | `/api/v1/trips/{id}/expenses` | Ajouter une dépense |
+| GET | `/api/v1/trips/{id}/expenses` | Liste des dépenses (paginé) |
+| PUT | `/api/v1/expenses/{id}` | Modifier une dépense |
+| DELETE | `/api/v1/expenses/{id}` | Supprimer (soft delete) |
+| GET | `/api/v1/trips/{id}/balance` | Équilibrage calculé |
+| GET | `/api/v1/trips/{id}/expenses/export` | Export CSV ou PDF |
 
-## Modèle de données
+## gRPC Clients
 
-**Expense**
+- `TripService.CheckMembership(tripId, userId)` — vérification d'appartenance
+- `TripService.GetTripCurrency(tripId)` — devise de référence pour l'équilibrage
+- `FileService.GetPresignedUrl(key)` — URL de lecture pour les justificatifs
 
-- `id` (UUID) : identifiant unique
-- `trip_id` (UUID, FK) : voyage associé
-- `title` (String) : description de la dépense
-- `category` (ENUM: HEBERGEMENT, TRANSPORT, NOURRITURE, ACTIVITES, DIVERS)
-- `amount` (BigDecimal) : montant
-- `currency` (String) : devise (EUR, USD, GBP, etc.)
-- `paid_by` (UUID) : ID Keycloak de celui qui a payé
-- `split_type` (ENUM: EQUAL, CUSTOM, PERCENTAGE) : méthode de répartition
-- `receipt_key` (String, nullable) : clé du reçu sur MinIO
-- `created_at` (Timestamp)
-- `updated_at` (Timestamp)
+## Modèle de données (`db_expense`)
 
-**ExpenseSplit**
+**expense**
 
-- `id` (UUID)
-- `expense_id` (UUID, FK)
-- `keycloak_id` (UUID) : participant concerné
-- `amount` (BigDecimal) : montant à partager
-- `percentage` (Double, nullable) : si répartition en pourcentage
+| Colonne | Type | Description |
+|---------|------|-------------|
+| `id` | UUID PK | Identifiant unique (UUID v7) |
+| `trip_id` | UUID NOT NULL | Référence au trip |
+| `paid_by` | UUID NOT NULL | keycloak_id du payeur |
+| `amount` | DECIMAL NOT NULL | Montant |
+| `currency` | VARCHAR(3) NOT NULL | Devise (ISO 4217) |
+| `category` | ENUM NOT NULL | FOOD / TRANSPORT / ACCOMMODATION / ACTIVITY / OTHER |
+| `description` | VARCHAR(255) NOT NULL | Description |
+| `receipt_key` | VARCHAR(500) NULLABLE | Clé MinIO du justificatif |
+| `split_mode` | ENUM NOT NULL | EQUAL / CUSTOM / PERCENTAGE |
+| `created_at` | TIMESTAMP NOT NULL | |
+| `updated_at` | TIMESTAMP NOT NULL | |
+| `deleted_at` | TIMESTAMP NULLABLE | Soft delete |
 
-**Kitty**
+**expense_split**
 
-- `id` (UUID)
-- `trip_id` (UUID, FK)
-- `total_amount` (BigDecimal) : montant total dans la cagnotte
-- `balance_per_member` (Map<UUID, BigDecimal>) : solde par participant
-- `last_updated` (Timestamp)
+| Colonne | Type | Description |
+|---------|------|-------------|
+| `id` | UUID PK | |
+| `expense_id` | UUID NOT NULL FK→expense | |
+| `keycloak_id` | UUID NOT NULL | Participant concerné |
+| `share_amount` | DECIMAL NOT NULL | Part à la charge de cet utilisateur |
 
-**Transaction** (résultat du calcul de règlement)
+## Algorithme d'équilibrage
 
-- `id` (UUID)
-- `trip_id` (UUID, FK)
-- `from_keycloak_id` (UUID) : qui doit rembourser
-- `to_keycloak_id` (UUID) : qui doit recevoir
-- `amount` (BigDecimal)
-- `currency` (String)
-- `calculated_at` (Timestamp)
-- `status` (ENUM: PENDING, COMPLETED)
+L'algorithme `BalanceCalculator` minimise le nombre de transactions pour équilibrer les comptes du groupe :
 
-## Événements (RabbitMQ)
+1. Calculer le solde net de chaque participant : `total_payé - total_dû`
+2. Séparer les débiteurs (solde < 0) et les créditeurs (solde > 0)
+3. Trier les deux listes par montant absolu décroissant
+4. Pour chaque paire (plus gros débiteur, plus gros créditeur) : transférer le minimum des deux montants
+5. Répéter jusqu'à ce que tous les soldes soient à zéro (± 0.01)
+
+Garantit au maximum **N-1 transactions** pour N participants. Le multi-devises est géré en convertissant toutes
+les dépenses dans la devise du trip via l'API ECB/Fixer.
+
+## Événements RabbitMQ (Exchange : `plantogether.events`)
 
 **Publie :**
 
-- `ExpenseCreated` — Émis lors d'une nouvelle dépense
-- `ExpenseUpdated` — Émis lors de la modification d'une dépense
-- `ExpenseDeleted` — Émis lors de la suppression
-- `BalanceCalculated` — Émis après calcul des règlements
-- `KittyUpdated` — Émis lors d'une modification de cagnotte
+| Routing Key | Déclencheur |
+|-------------|-------------|
+| `expense.created` | Ajout d'une dépense |
+| `expense.deleted` | Suppression d'une dépense |
 
-**Consomme :** (aucun)
+**Consomme :** aucun
 
 ## Configuration
 
 ```yaml
 server:
   port: 8084
-  servlet:
-    context-path: /
-    
+
 spring:
   application:
     name: plantogether-expense-service
+  datasource:
+    url: jdbc:postgresql://postgres:5432/db_expense
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: false
-  datasource:
-    url: jdbc:postgresql://postgres:5432/plantogether_expense
-    username: ${DB_USER}
-    password: ${DB_PASSWORD}
-  rabbitmq:
-    host: ${RABBITMQ_HOST:rabbitmq}
-    port: ${RABBITMQ_PORT:5672}
-    username: ${RABBITMQ_USER}
-    password: ${RABBITMQ_PASSWORD}
-  redis:
-    host: ${REDIS_HOST:redis}
-    port: ${REDIS_PORT:6379}
 
-keycloak:
-  serverUrl: ${KEYCLOAK_SERVER_URL:http://keycloak:8080}
-  realm: ${KEYCLOAK_REALM:plantogether}
-  clientId: ${KEYCLOAK_CLIENT_ID}
-  
-minio:
-  endpoint: ${MINIO_ENDPOINT:http://minio:9000}
-  accessKey: ${MINIO_ACCESS_KEY}
-  secretKey: ${MINIO_SECRET_KEY}
-  bucket: ${MINIO_BUCKET:plantogether}
-
-exchange:
-  rateApi: ${EXCHANGE_RATE_API_URL:https://api.exchangerate-api.com/v4/latest}
+grpc:
+  client:
+    trip-service:
+      address: static://trip-service:9081
+    file-service:
+      address: static://file-service:9088
+  server:
+    port: 9084
 ```
 
 ## Lancer en local
 
 ```bash
-# Prérequis : Docker Compose (infra), Java 21+, Maven 3.9+
+# Prérequis : docker compose --profile essential up -d
+# + plantogether-proto et plantogether-common installés
 
-# Option 1 : Maven
 mvn spring-boot:run
-
-# Option 2 : Docker
-docker build -t plantogether-expense-service .
-docker run -p 8084:8081 \
-  -e KEYCLOAK_SERVER_URL=http://host.docker.internal:8080 \
-  -e DB_USER=postgres \
-  -e DB_PASSWORD=postgres \
-  -e MINIO_ENDPOINT=http://host.docker.internal:9000 \
-  plantogether-expense-service
 ```
 
 ## Dépendances
 
-- **Keycloak 24+** : authentification et autorisation
-- **PostgreSQL 16** : persistance des dépenses et calculs
-- **RabbitMQ** : publication d'événements
-- **Redis** : cache des taux de change et des calculs de solde
-- **MinIO** : stockage des reçus
-- **Spring Boot 3.3.6** : framework web
-- **Apache PDFBox** : génération de PDF
-- **OpenCSV** : export CSV
-- **Jackson** : sérialisation JSON
+- **Keycloak 24+** : validation JWT
+- **PostgreSQL 16** (`db_expense`) : dépenses et répartitions
+- **RabbitMQ** : publication d'événements (`expense.created`, `expense.deleted`)
+- **Redis** : rate limiting (Bucket4j — 30 dépenses/heure/user)
+- **Trip Service** (gRPC 9081) : vérification appartenance + devise du trip
+- **File Service** (gRPC 9088) : presigned URLs pour les justificatifs
+- **plantogether-proto** : contrats gRPC (client + serveur)
+- **plantogether-common** : DTOs events, CorsConfig
 
-## Algorithme d'optimisation des transactions
+## Sécurité
 
-L'algorithme minimise le nombre de transactions pour régler tous les soldes :
-
-```
-1. Calculer le solde net pour chaque participant
-2. Créer une liste de "débiteurs" (solde négatif) et "créditeurs" (solde positif)
-3. Appareiller de manière gloutonne : le plus grand débiteur avec le plus grand créditeur
-4. Répéter jusqu'à tous les soldes à 0
-```
-
-Résultat : au maximum N-1 transactions pour N participants.
-
-## Notes de sécurité
-
-- Les dépenses ne peuvent être modifiées que par leur créateur
-- Tous les endpoints requièrent authentification Keycloak
-- Les reçus uploadés sont validés (taille max 10 MB, formats autorisés)
-- Les taux de change sont mis en cache avec TTL de 1 heure
-- Zéro PII stockée (seuls les UUIDs Keycloak)
-- Export CSV/PDF ne contient pas de données sensibles (pas de noms)
+- Tous les endpoints requièrent un token Bearer Keycloak valide
+- L'appartenance au trip est vérifiée via gRPC avant chaque opération
+- Seul le créateur d'une dépense ou l'ORGANIZER peut la modifier ou la supprimer
+- Zero PII stockée (uniquement des `keycloak_id`)

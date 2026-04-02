@@ -32,7 +32,7 @@ cd ../plantogether-common && mvn clean install
 
 ## Architecture
 
-Spring Boot 3.3.6 microservice (Java 21). Manages trip expenses, cost splitting, and settlement calculations.
+Spring Boot 3.3.6 microservice (Java 25). Manages trip expenses, cost splitting, and settlement calculations.
 
 **Ports:** REST `8084` · gRPC `9084` (server — reserved for future consumers)
 

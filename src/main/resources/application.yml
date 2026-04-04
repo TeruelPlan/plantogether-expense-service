@@ -29,11 +29,6 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-  security:
-    oauth2:
-      resourceserver:
-        jwt:
-          jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8180}/realms/plantogether/protocol/openid-connect/certs
 
 management:
   endpoints:

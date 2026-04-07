@@ -96,9 +96,17 @@
 
     <repositories>
         <repository>
-            <id>github</id>
-            <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/TeruelPlan/plantogether</url>
+            <id>github-proto</id>
+            <name>GitHub Packages — proto</name>
+            <url>https://maven.pkg.github.com/TeruelPlan/plantogether-proto</url>
+            <snapshots>
+                <enabled>true</enabled>
+            </snapshots>
+        </repository>
+        <repository>
+            <id>github-common</id>
+            <name>GitHub Packages — common</name>
+            <url>https://maven.pkg.github.com/TeruelPlan/plantogether-common</url>
             <snapshots>
                 <enabled>true</enabled>
             </snapshots>

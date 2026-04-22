@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.plantogether</groupId>
         <artifactId>plantogether-parent</artifactId>
-        <version>1.1.0</version>
+        <version>1.2.0</version>
     </parent>
 
     <artifactId>plantogether-expense-service</artifactId>
@@ -20,7 +20,7 @@
             <dependency>
                 <groupId>com.plantogether</groupId>
                 <artifactId>plantogether-bom</artifactId>
-                <version>1.0.1</version>
+                <version>1.2.0</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -105,20 +105,8 @@
 
     <repositories>
         <repository>
-            <id>github-parent</id>
-            <url>https://maven.pkg.github.com/TeruelPlan/plantogether-parent</url>
-        </repository>
-        <repository>
-            <id>github-bom</id>
-            <url>https://maven.pkg.github.com/TeruelPlan/plantogether-bom</url>
-        </repository>
-        <repository>
-            <id>github-common</id>
-            <url>https://maven.pkg.github.com/TeruelPlan/plantogether-common</url>
-        </repository>
-        <repository>
-            <id>github-proto</id>
-            <url>https://maven.pkg.github.com/TeruelPlan/plantogether-proto</url>
+            <id>github-packages</id>
+            <url>https://maven.pkg.github.com/TeruelPlan/plantogether-packages</url>
         </repository>
     </repositories>
 </project>

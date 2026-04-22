@@ -62,12 +62,12 @@
         <dependency>
             <groupId>com.plantogether</groupId>
             <artifactId>plantogether-common</artifactId>
-            <version>1.7.0-SNAPSHOT</version>
+            <version>1.7.0</version>
         </dependency>
         <dependency>
             <groupId>com.plantogether</groupId>
             <artifactId>plantogether-common</artifactId>
-            <version>1.7.0-SNAPSHOT</version>
+            <version>1.7.0</version>
             <classifier>tests</classifier>
             <scope>test</scope>
         </dependency>

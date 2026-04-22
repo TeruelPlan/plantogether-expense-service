@@ -27,12 +27,14 @@ jobs:
       - name: Run unit tests
         run: mvn -s .settings.xml --batch-mode test
         env:
-          GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run integration tests
         run: mvn -s .settings.xml --batch-mode verify -Dsurefire.skip=true
         env:
-          GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload test reports
         uses: actions/upload-artifact@v4

@@ -24,15 +24,20 @@ mvn test -Dtest=MyTestClass
 mvn test -Dtest=MyTestClass#myMethod
 ```
 
-**Prerequisites:** install shared libs first:
+**Prerequisites:**
+
+Local Maven builds resolve shared libs (`plantogether-parent`, `plantogether-bom`, `plantogether-common`,
+`plantogether-proto`) from GitHub Packages. Export a PAT with `read:packages` before running `mvn`:
+
 ```bash
-cd ../plantogether-proto && mvn clean install
-cd ../plantogether-common && mvn clean install
+export GITHUB_ACTOR=<your-github-username>
+export GITHUB_TOKEN=<your-PAT-with-read:packages>
+mvn -s .settings.xml clean package
 ```
 
 ## Architecture
 
-Spring Boot 3.3.6 microservice (Java 25). Manages trip expenses, cost splitting, and settlement calculations.
+Spring Boot 3.5.9 microservice (Java 21). Manages trip expenses, cost splitting, and settlement calculations.
 
 **Ports:** REST `8084` · gRPC `9084` (server — reserved for future consumers)
 

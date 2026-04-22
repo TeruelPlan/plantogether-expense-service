@@ -31,7 +31,7 @@ Local Maven builds resolve shared libs (`plantogether-parent`, `plantogether-bom
 
 ```bash
 export GITHUB_ACTOR=<your-github-username>
-export GITHUB_TOKEN=<your-PAT-with-read:packages>
+export PACKAGES_TOKEN=<your-PAT-with-read:packages>
 mvn -s .settings.xml clean package
 ```
 

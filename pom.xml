@@ -15,6 +15,13 @@
     <name>plantogether-expense-service</name>
     <description>Microservice Expense — expenses, balance, settlement algorithm</description>
 
+    <scm>
+        <connection>scm:git:https://github.com/TeruelPlan/plantogether-expense-service.git</connection>
+        <developerConnection>scm:git:https://github.com/TeruelPlan/plantogether-expense-service.git</developerConnection>
+        <url>https://github.com/TeruelPlan/plantogether-expense-service</url>
+        <tag>HEAD</tag>
+    </scm>
+
     <dependencyManagement>
         <dependencies>
             <dependency>

@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      releaseVersion:
+        description: "Release version (e.g. 1.0.0)"
+        required: true
+      developmentVersion:
+        description: "Next development version (e.g. 1.1.0-SNAPSHOT)"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PACKAGES_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          server-id: github-packages
+          server-username: GITHUB_ACTOR
+          server-password: PACKAGES_TOKEN
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            !~/.m2/repository/com/plantogether
+          key: m2-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
+          restore-keys: m2-${{ runner.os }}-
+
+      - name: Prepare release (bump version, tag, push)
+        run: |
+          mvn --batch-mode -s .settings.xml release:prepare \
+            -DreleaseVersion=${{ inputs.releaseVersion }} \
+            -DdevelopmentVersion=${{ inputs.developmentVersion }} \
+            -Dusername=x-access-token \
+            -Dpassword=${{ secrets.PACKAGES_TOKEN }}
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          PACKAGES_TOKEN: ${{ secrets.PACKAGES_TOKEN }}
+
+      - name: Checkout release tag
+        run: git checkout v${{ inputs.releaseVersion }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/teruelplan/${{ github.event.repository.name }}:${{ inputs.releaseVersion }}
+            ghcr.io/teruelplan/${{ github.event.repository.name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.releaseVersion }}
+          name: "v${{ inputs.releaseVersion }}"
+          generate_release_notes: true
+
+      - name: Dispatch Helm values update to infra repo
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.PAT_E2E_TRIGGER }}
+          repository: TeruelPlan/infra
+          event-type: update-helm-tag
+          client-payload: |
+            {
+              "service": "${{ github.event.repository.name }}",
+              "tag": "${{ inputs.releaseVersion }}"
+            }

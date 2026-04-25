@@ -21,13 +21,18 @@
         <url>https://github.com/TeruelPlan/plantogether-expense-service</url>
         <tag>HEAD</tag>
     </scm>
+    <properties>
+        <plantogether-bom.version>1.5.0</plantogether-bom.version>
+    </properties>
+
+
 
     <dependencyManagement>
         <dependencies>
             <dependency>
                 <groupId>com.plantogether</groupId>
                 <artifactId>plantogether-bom</artifactId>
-                <version>1.3.0</version>
+                <version>${plantogether-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

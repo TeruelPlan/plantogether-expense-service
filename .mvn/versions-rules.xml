@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ruleset comparisonMethod="maven"
+         xmlns="https://www.mojohaus.org/VERSIONS/rule/2.1.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="https://www.mojohaus.org/VERSIONS/rule/2.1.0
+                             https://www.mojohaus.org/versions-maven-plugin/rule/2.1.0/ruleset.xsd">
+
+    <!-- Ignore pre-release suffixes globally -->
+    <ignoreVersions>
+        <ignoreVersion type="regex">.*[-.]alpha.*</ignoreVersion>
+        <ignoreVersion type="regex">.*[-.]beta.*</ignoreVersion>
+        <ignoreVersion type="regex">.*[-.]rc.*</ignoreVersion>
+        <ignoreVersion type="regex">.*[-.]RC.*</ignoreVersion>
+        <ignoreVersion type="regex">.*[-.]M\d+.*</ignoreVersion>
+        <ignoreVersion type="regex">.*[-.]milestone.*</ignoreVersion>
+        <ignoreVersion type="regex">.*-SNAPSHOT</ignoreVersion>
+    </ignoreVersions>
+
+</ruleset>

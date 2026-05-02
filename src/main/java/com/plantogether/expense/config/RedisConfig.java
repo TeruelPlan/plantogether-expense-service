@@ -1,9 +1,8 @@
 package com.plantogether.expense.config;
 
+import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-
-import java.time.Clock;
 
 /**
  * FX cache wiring. {@code StringRedisTemplate} is auto-configured by Spring Boot via {@code
@@ -13,8 +12,8 @@ import java.time.Clock;
 @Configuration
 public class RedisConfig {
 
-    @Bean
-    public Clock systemClock() {
-        return Clock.systemUTC();
-    }
+  @Bean
+  public Clock systemClock() {
+    return Clock.systemUTC();
+  }
 }

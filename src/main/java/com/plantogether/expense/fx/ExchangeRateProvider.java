@@ -10,16 +10,13 @@ import java.time.Instant;
  */
 public interface ExchangeRateProvider {
 
-    /**
-     * Returns the FX quote for converting {@code baseCurrency} into {@code quoteCurrency}.
-     *
-     * @throws ExchangeRateUnavailableException when no live, cached, or last-known rate is available
-     */
-    FxQuote getRate(String baseCurrency, String quoteCurrency);
+  /**
+   * Returns the FX quote for converting {@code baseCurrency} into {@code quoteCurrency}.
+   *
+   * @throws ExchangeRateUnavailableException when no live, cached, or last-known rate is available
+   */
+  FxQuote getRate(String baseCurrency, String quoteCurrency);
 
-    /**
-     * Immutable FX snapshot returned by {@link #getRate(String, String)}.
-     */
-    record FxQuote(BigDecimal rate, RateSource source, Instant fetchedAt) {
-    }
+  /** Immutable FX snapshot returned by {@link #getRate(String, String)}. */
+  record FxQuote(BigDecimal rate, RateSource source, Instant fetchedAt) {}
 }

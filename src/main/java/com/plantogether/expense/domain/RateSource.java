@@ -5,16 +5,10 @@ package com.plantogether.expense.domain;
  * and never recomputed.
  */
 public enum RateSource {
-    /**
-     * Fetched live from the FX provider, or same-currency identity.
-     */
-    LIVE,
-    /**
-     * Read from the TTL-bounded Redis cache (≤ 24h old).
-     */
-    CACHED,
-    /**
-     * Provider unreachable; served from the unbounded last-known mirror.
-     */
-    FALLBACK
+  /** Fetched live from the FX provider, or same-currency identity. */
+  LIVE,
+  /** Read from the TTL-bounded Redis cache (≤ 24h old). */
+  CACHED,
+  /** Provider unreachable; served from the unbounded last-known mirror. */
+  FALLBACK
 }

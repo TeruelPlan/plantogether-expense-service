@@ -1,5 +1,10 @@
 package com.plantogether.expense.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
 import com.plantogether.common.exception.AccessDeniedException;
 import com.plantogether.common.grpc.Role;
 import com.plantogether.common.grpc.TripClient;
@@ -12,6 +17,11 @@ import com.plantogether.expense.fx.ExchangeRateProvider;
 import com.plantogether.expense.fx.ExchangeRateProvider.FxQuote;
 import com.plantogether.expense.fx.ExchangeRateUnavailableException;
 import com.plantogether.expense.repository.ExpenseRepository;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,353 +33,338 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
-
 @ExtendWith(MockitoExtension.class)
 class ExpenseServiceTest {
 
-    @Mock
-    private ExpenseRepository expenseRepository;
-    @Mock
-    private TripClient tripClient;
-    @Mock
-    private ApplicationEventPublisher eventPublisher;
-    @Mock
-    private ExchangeRateProvider exchangeRateProvider;
+  @Mock private ExpenseRepository expenseRepository;
+  @Mock private TripClient tripClient;
+  @Mock private ApplicationEventPublisher eventPublisher;
+  @Mock private ExchangeRateProvider exchangeRateProvider;
 
-    private ExpenseService service;
+  private ExpenseService service;
 
-    private static final UUID TRIP_ID = UUID.randomUUID();
-    private static final String DEVICE_ID = UUID.randomUUID().toString();
+  private static final UUID TRIP_ID = UUID.randomUUID();
+  private static final String DEVICE_ID = UUID.randomUUID().toString();
 
-    @BeforeEach
-    void setUp() {
-        service =
-                new ExpenseService(expenseRepository, tripClient, eventPublisher, exchangeRateProvider);
-    }
+  @BeforeEach
+  void setUp() {
+    service =
+        new ExpenseService(expenseRepository, tripClient, eventPublisher, exchangeRateProvider);
+  }
 
-    private void stubFxSameCurrency(String currency) {
-        when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn(currency);
-        when(exchangeRateProvider.getRate(currency, currency))
-                .thenReturn(new FxQuote(new BigDecimal("1.0000"), RateSource.LIVE, Instant.now()));
-    }
+  private void stubFxSameCurrency(String currency) {
+    when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn(currency);
+    when(exchangeRateProvider.getRate(currency, currency))
+        .thenReturn(new FxQuote(new BigDecimal("1.0000"), RateSource.LIVE, Instant.now()));
+  }
 
-    @Test
-    void record_member_defaultEqualSplit_savesAndPublishesEvent() {
-        UUID m1 = UUID.fromString("00000000-0000-0000-0000-000000000001");
-        UUID m2 = UUID.fromString("00000000-0000-0000-0000-000000000002");
-        UUID payer = UUID.fromString(DEVICE_ID);
+  @Test
+  void record_member_defaultEqualSplit_savesAndPublishesEvent() {
+    UUID m1 = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    UUID m2 = UUID.fromString("00000000-0000-0000-0000-000000000002");
+    UUID payer = UUID.fromString(DEVICE_ID);
 
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-        when(tripClient.getTripMembers(TRIP_ID.toString()))
-                .thenReturn(
-                        List.of(
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.getTripMembers(TRIP_ID.toString()))
+        .thenReturn(
+            List.of(
                 new TripMember(m1, "Alice", Role.PARTICIPANT),
                 new TripMember(m2, "Bob", Role.PARTICIPANT),
-                                new TripMember(payer, "Carol", Role.ORGANIZER)));
-        stubFxSameCurrency("EUR");
-        when(expenseRepository.save(any(Expense.class)))
-                .thenAnswer(
-                        inv -> {
-                            Expense e = inv.getArgument(0);
-                            e.setId(UUID.randomUUID());
-                            e.setCreatedAt(Instant.now());
-                            e.setUpdatedAt(Instant.now());
-                            return e;
-                        });
+                new TripMember(payer, "Carol", Role.ORGANIZER)));
+    stubFxSameCurrency("EUR");
+    when(expenseRepository.save(any(Expense.class)))
+        .thenAnswer(
+            inv -> {
+              Expense e = inv.getArgument(0);
+              e.setId(UUID.randomUUID());
+              e.setCreatedAt(Instant.now());
+              e.setUpdatedAt(Instant.now());
+              return e;
+            });
 
-        RecordExpenseRequest req =
-                RecordExpenseRequest.builder()
-                        .amount(new BigDecimal("30.00"))
-                        .currency("EUR")
-                        .category(ExpenseCategory.FOOD)
-                        .description("Dinner")
-                        .splitMode(SplitMode.EQUAL)
-                        .build();
+    RecordExpenseRequest req =
+        RecordExpenseRequest.builder()
+            .amount(new BigDecimal("30.00"))
+            .currency("EUR")
+            .category(ExpenseCategory.FOOD)
+            .description("Dinner")
+            .splitMode(SplitMode.EQUAL)
+            .build();
 
-        ExpenseResponse resp = service.recordExpense(TRIP_ID, DEVICE_ID, req);
+    ExpenseResponse resp = service.recordExpense(TRIP_ID, DEVICE_ID, req);
 
-        ArgumentCaptor<Expense> expenseCaptor = ArgumentCaptor.forClass(Expense.class);
-        verify(expenseRepository).save(expenseCaptor.capture());
-        Expense saved = expenseCaptor.getValue();
+    ArgumentCaptor<Expense> expenseCaptor = ArgumentCaptor.forClass(Expense.class);
+    verify(expenseRepository).save(expenseCaptor.capture());
+    Expense saved = expenseCaptor.getValue();
 
-        assertThat(saved.getSplits()).hasSize(3);
-        BigDecimal splitSum =
-                saved.getSplits().stream()
-                        .map(ExpenseSplit::getShareAmount)
-                        .reduce(BigDecimal.ZERO, BigDecimal::add);
-        assertThat(splitSum).isEqualByComparingTo(new BigDecimal("30.00"));
+    assertThat(saved.getSplits()).hasSize(3);
+    BigDecimal splitSum =
+        saved.getSplits().stream()
+            .map(ExpenseSplit::getShareAmount)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+    assertThat(splitSum).isEqualByComparingTo(new BigDecimal("30.00"));
 
-        ArgumentCaptor<ExpenseCreatedInternalEvent> eventCaptor =
-                ArgumentCaptor.forClass(ExpenseCreatedInternalEvent.class);
-        verify(eventPublisher).publishEvent(eventCaptor.capture());
-        ExpenseCreatedInternalEvent event = eventCaptor.getValue();
-        assertThat(event.tripId()).isEqualTo(TRIP_ID);
-        assertThat(event.paidByDeviceId()).isEqualTo(DEVICE_ID);
-    }
+    ArgumentCaptor<ExpenseCreatedInternalEvent> eventCaptor =
+        ArgumentCaptor.forClass(ExpenseCreatedInternalEvent.class);
+    verify(eventPublisher).publishEvent(eventCaptor.capture());
+    ExpenseCreatedInternalEvent event = eventCaptor.getValue();
+    assertThat(event.tripId()).isEqualTo(TRIP_ID);
+    assertThat(event.paidByDeviceId()).isEqualTo(DEVICE_ID);
+  }
 
-    @Test
-    void record_member_explicitSplits_passThroughs() {
-        UUID splitDeviceId = UUID.fromString(DEVICE_ID);
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-        when(tripClient.getTripMembers(TRIP_ID.toString()))
-                .thenReturn(List.of(new TripMember(splitDeviceId, "Alice", Role.PARTICIPANT)));
-        stubFxSameCurrency("EUR");
-        when(expenseRepository.save(any(Expense.class)))
-                .thenAnswer(
-                        inv -> {
-                            Expense e = inv.getArgument(0);
-                            e.setId(UUID.randomUUID());
-                            e.setCreatedAt(Instant.now());
-                            e.setUpdatedAt(Instant.now());
-                            return e;
-                        });
+  @Test
+  void record_member_explicitSplits_passThroughs() {
+    UUID splitDeviceId = UUID.fromString(DEVICE_ID);
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.getTripMembers(TRIP_ID.toString()))
+        .thenReturn(List.of(new TripMember(splitDeviceId, "Alice", Role.PARTICIPANT)));
+    stubFxSameCurrency("EUR");
+    when(expenseRepository.save(any(Expense.class)))
+        .thenAnswer(
+            inv -> {
+              Expense e = inv.getArgument(0);
+              e.setId(UUID.randomUUID());
+              e.setCreatedAt(Instant.now());
+              e.setUpdatedAt(Instant.now());
+              return e;
+            });
 
-        RecordExpenseRequest req =
-                RecordExpenseRequest.builder()
-                        .amount(new BigDecimal("50.00"))
-                        .currency("EUR")
-                        .category(ExpenseCategory.TRANSPORT)
-                        .description("Taxi")
-                        .splitMode(SplitMode.CUSTOM)
-                        .splits(
-                                List.of(
-                                        new RecordExpenseRequest.SplitInput(splitDeviceId, new BigDecimal("50.00"))))
-                        .build();
+    RecordExpenseRequest req =
+        RecordExpenseRequest.builder()
+            .amount(new BigDecimal("50.00"))
+            .currency("EUR")
+            .category(ExpenseCategory.TRANSPORT)
+            .description("Taxi")
+            .splitMode(SplitMode.CUSTOM)
+            .splits(
+                List.of(
+                    new RecordExpenseRequest.SplitInput(splitDeviceId, new BigDecimal("50.00"))))
+            .build();
 
-        service.recordExpense(TRIP_ID, DEVICE_ID, req);
+    service.recordExpense(TRIP_ID, DEVICE_ID, req);
 
-        verify(expenseRepository).save(any(Expense.class));
-    }
+    verify(expenseRepository).save(any(Expense.class));
+  }
 
-    @Test
-    void record_nonMember_throwsAccessDenied() {
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(false);
+  @Test
+  void record_nonMember_throwsAccessDenied() {
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(false);
 
-        RecordExpenseRequest req =
-                RecordExpenseRequest.builder()
-                        .amount(new BigDecimal("10.00"))
-                        .currency("EUR")
-                        .category(ExpenseCategory.FOOD)
-                        .description("Snack")
-                        .splitMode(SplitMode.EQUAL)
-                        .build();
+    RecordExpenseRequest req =
+        RecordExpenseRequest.builder()
+            .amount(new BigDecimal("10.00"))
+            .currency("EUR")
+            .category(ExpenseCategory.FOOD)
+            .description("Snack")
+            .splitMode(SplitMode.EQUAL)
+            .build();
 
-        assertThatThrownBy(() -> service.recordExpense(TRIP_ID, DEVICE_ID, req))
-                .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> service.recordExpense(TRIP_ID, DEVICE_ID, req))
+        .isInstanceOf(AccessDeniedException.class);
 
-        verify(expenseRepository, never()).save(any());
-    }
+    verify(expenseRepository, never()).save(any());
+  }
 
-    @Test
-    void record_splitModeCustomWithoutSplits_throws400() {
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+  @Test
+  void record_splitModeCustomWithoutSplits_throws400() {
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
 
-        RecordExpenseRequest req =
-                RecordExpenseRequest.builder()
-                        .amount(new BigDecimal("20.00"))
-                        .currency("EUR")
-                        .category(ExpenseCategory.FOOD)
-                        .description("Lunch")
-                        .splitMode(SplitMode.CUSTOM)
-                        .build();
+    RecordExpenseRequest req =
+        RecordExpenseRequest.builder()
+            .amount(new BigDecimal("20.00"))
+            .currency("EUR")
+            .category(ExpenseCategory.FOOD)
+            .description("Lunch")
+            .splitMode(SplitMode.CUSTOM)
+            .build();
 
-        assertThatThrownBy(() -> service.recordExpense(TRIP_ID, DEVICE_ID, req))
-                .isInstanceOf(ResponseStatusException.class);
+    assertThatThrownBy(() -> service.recordExpense(TRIP_ID, DEVICE_ID, req))
+        .isInstanceOf(ResponseStatusException.class);
 
-        verify(expenseRepository, never()).save(any());
-    }
+    verify(expenseRepository, never()).save(any());
+  }
 
-    @Test
-    void list_member_returnsPageOrderedByCreatedAtDesc() {
-        Expense e1 = buildExpense(TRIP_ID);
-        Expense e2 = buildExpense(TRIP_ID);
-        PageRequest pageable = PageRequest.of(0, 20);
+  @Test
+  void list_member_returnsPageOrderedByCreatedAtDesc() {
+    Expense e1 = buildExpense(TRIP_ID);
+    Expense e2 = buildExpense(TRIP_ID);
+    PageRequest pageable = PageRequest.of(0, 20);
 
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-        when(expenseRepository.findByTripIdAndDeletedAtIsNull(TRIP_ID, pageable))
-                .thenReturn(new PageImpl<>(List.of(e1, e2), pageable, 2));
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(expenseRepository.findByTripIdAndDeletedAtIsNull(TRIP_ID, pageable))
+        .thenReturn(new PageImpl<>(List.of(e1, e2), pageable, 2));
 
-        var page = service.listExpenses(TRIP_ID, DEVICE_ID, pageable);
+    var page = service.listExpenses(TRIP_ID, DEVICE_ID, pageable);
 
-        assertThat(page.getContent()).hasSize(2);
-        assertThat(page.getTotalElements()).isEqualTo(2);
-        verify(expenseRepository).findByTripIdAndDeletedAtIsNull(TRIP_ID, pageable);
-    }
+    assertThat(page.getContent()).hasSize(2);
+    assertThat(page.getTotalElements()).isEqualTo(2);
+    verify(expenseRepository).findByTripIdAndDeletedAtIsNull(TRIP_ID, pageable);
+  }
 
-    @Test
-    void list_nonMember_throwsAccessDenied() {
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(false);
+  @Test
+  void list_nonMember_throwsAccessDenied() {
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(false);
 
-        assertThatThrownBy(() -> service.listExpenses(TRIP_ID, DEVICE_ID, PageRequest.of(0, 20)))
-                .isInstanceOf(AccessDeniedException.class);
+    assertThatThrownBy(() -> service.listExpenses(TRIP_ID, DEVICE_ID, PageRequest.of(0, 20)))
+        .isInstanceOf(AccessDeniedException.class);
 
-        verify(expenseRepository, never()).findByTripIdAndDeletedAtIsNull(any(), any());
-    }
+    verify(expenseRepository, never()).findByTripIdAndDeletedAtIsNull(any(), any());
+  }
 
-    @Test
-    void create_sameCurrency_persistsRateOne_sourceLive() {
-        UUID m1 = UUID.fromString(DEVICE_ID);
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-        when(tripClient.getTripMembers(TRIP_ID.toString()))
-                .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
-        Instant now = Instant.parse("2026-04-28T10:00:00Z");
-        when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
-        when(exchangeRateProvider.getRate("EUR", "EUR"))
-                .thenReturn(new FxQuote(new BigDecimal("1.0000"), RateSource.LIVE, now));
-        when(expenseRepository.save(any(Expense.class)))
-                .thenAnswer(
-                        inv -> {
-                            Expense e = inv.getArgument(0);
-                            e.setId(UUID.randomUUID());
-                            e.setCreatedAt(now);
-                            e.setUpdatedAt(now);
-                            return e;
-                        });
+  @Test
+  void create_sameCurrency_persistsRateOne_sourceLive() {
+    UUID m1 = UUID.fromString(DEVICE_ID);
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.getTripMembers(TRIP_ID.toString()))
+        .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
+    Instant now = Instant.parse("2026-04-28T10:00:00Z");
+    when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
+    when(exchangeRateProvider.getRate("EUR", "EUR"))
+        .thenReturn(new FxQuote(new BigDecimal("1.0000"), RateSource.LIVE, now));
+    when(expenseRepository.save(any(Expense.class)))
+        .thenAnswer(
+            inv -> {
+              Expense e = inv.getArgument(0);
+              e.setId(UUID.randomUUID());
+              e.setCreatedAt(now);
+              e.setUpdatedAt(now);
+              return e;
+            });
 
-        RecordExpenseRequest req =
-                RecordExpenseRequest.builder()
-                        .amount(new BigDecimal("42.0000"))
-                        .currency("EUR")
-                        .category(ExpenseCategory.FOOD)
-                        .description("Same currency")
-                        .splitMode(SplitMode.EQUAL)
-                        .build();
+    RecordExpenseRequest req =
+        RecordExpenseRequest.builder()
+            .amount(new BigDecimal("42.0000"))
+            .currency("EUR")
+            .category(ExpenseCategory.FOOD)
+            .description("Same currency")
+            .splitMode(SplitMode.EQUAL)
+            .build();
 
-        ExpenseResponse resp = service.recordExpense(TRIP_ID, DEVICE_ID, req);
+    ExpenseResponse resp = service.recordExpense(TRIP_ID, DEVICE_ID, req);
 
-        assertThat(resp.getExchangeRate()).isEqualByComparingTo("1.0000");
-        assertThat(resp.getAmountInReferenceCurrency()).isEqualByComparingTo("42.0000");
-        assertThat(resp.getReferenceCurrency()).isEqualTo("EUR");
-        assertThat(resp.getRateSource()).isEqualTo(RateSource.LIVE);
-        assertThat(resp.getRateFetchedAt()).isEqualTo(now);
-    }
+    assertThat(resp.getExchangeRate()).isEqualByComparingTo("1.0000");
+    assertThat(resp.getAmountInReferenceCurrency()).isEqualByComparingTo("42.0000");
+    assertThat(resp.getReferenceCurrency()).isEqualTo("EUR");
+    assertThat(resp.getRateSource()).isEqualTo(RateSource.LIVE);
+    assertThat(resp.getRateFetchedAt()).isEqualTo(now);
+  }
 
-    @Test
-    void create_foreignCurrency_persistsConvertedAmount_rateSnapshot() {
-        UUID m1 = UUID.fromString(DEVICE_ID);
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-        when(tripClient.getTripMembers(TRIP_ID.toString()))
-                .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
-        Instant fetchedAt = Instant.parse("2026-04-28T10:00:00Z");
-        when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
-        when(exchangeRateProvider.getRate("USD", "EUR"))
-                .thenReturn(new FxQuote(new BigDecimal("0.9220"), RateSource.LIVE, fetchedAt));
-        when(expenseRepository.save(any(Expense.class)))
-                .thenAnswer(
-                        inv -> {
-                            Expense e = inv.getArgument(0);
-                            e.setId(UUID.randomUUID());
-                            e.setCreatedAt(fetchedAt);
-                            e.setUpdatedAt(fetchedAt);
-                            return e;
-                        });
+  @Test
+  void create_foreignCurrency_persistsConvertedAmount_rateSnapshot() {
+    UUID m1 = UUID.fromString(DEVICE_ID);
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.getTripMembers(TRIP_ID.toString()))
+        .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
+    Instant fetchedAt = Instant.parse("2026-04-28T10:00:00Z");
+    when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
+    when(exchangeRateProvider.getRate("USD", "EUR"))
+        .thenReturn(new FxQuote(new BigDecimal("0.9220"), RateSource.LIVE, fetchedAt));
+    when(expenseRepository.save(any(Expense.class)))
+        .thenAnswer(
+            inv -> {
+              Expense e = inv.getArgument(0);
+              e.setId(UUID.randomUUID());
+              e.setCreatedAt(fetchedAt);
+              e.setUpdatedAt(fetchedAt);
+              return e;
+            });
 
-        RecordExpenseRequest req =
-                RecordExpenseRequest.builder()
-                        .amount(new BigDecimal("42.0000"))
-                        .currency("USD")
-                        .category(ExpenseCategory.FOOD)
-                        .description("Foreign")
-                        .splitMode(SplitMode.EQUAL)
-                        .build();
+    RecordExpenseRequest req =
+        RecordExpenseRequest.builder()
+            .amount(new BigDecimal("42.0000"))
+            .currency("USD")
+            .category(ExpenseCategory.FOOD)
+            .description("Foreign")
+            .splitMode(SplitMode.EQUAL)
+            .build();
 
-        ExpenseResponse resp = service.recordExpense(TRIP_ID, DEVICE_ID, req);
+    ExpenseResponse resp = service.recordExpense(TRIP_ID, DEVICE_ID, req);
 
-        ArgumentCaptor<Expense> cap = ArgumentCaptor.forClass(Expense.class);
-        verify(expenseRepository).save(cap.capture());
-        Expense saved = cap.getValue();
+    ArgumentCaptor<Expense> cap = ArgumentCaptor.forClass(Expense.class);
+    verify(expenseRepository).save(cap.capture());
+    Expense saved = cap.getValue();
 
-        assertThat(saved.getCurrency()).isEqualTo("USD");
-        assertThat(saved.getReferenceCurrency()).isEqualTo("EUR");
-        assertThat(saved.getExchangeRate()).isEqualByComparingTo("0.9220");
-        assertThat(saved.getAmountInReferenceCurrency()).isEqualByComparingTo("38.7240");
-        assertThat(saved.getRateSource()).isEqualTo(RateSource.LIVE);
-        assertThat(resp.getAmountInReferenceCurrency()).isEqualByComparingTo("38.7240");
-    }
+    assertThat(saved.getCurrency()).isEqualTo("USD");
+    assertThat(saved.getReferenceCurrency()).isEqualTo("EUR");
+    assertThat(saved.getExchangeRate()).isEqualByComparingTo("0.9220");
+    assertThat(saved.getAmountInReferenceCurrency()).isEqualByComparingTo("38.7240");
+    assertThat(saved.getRateSource()).isEqualTo(RateSource.LIVE);
+    assertThat(resp.getAmountInReferenceCurrency()).isEqualByComparingTo("38.7240");
+  }
 
-    @Test
-    void create_fallbackRate_persistsSourceFALLBACK_withOriginalFetchedAt() {
-        UUID m1 = UUID.fromString(DEVICE_ID);
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-        when(tripClient.getTripMembers(TRIP_ID.toString()))
-                .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
-        Instant originalFetch = Instant.parse("2026-04-20T08:00:00Z");
-        when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
-        when(exchangeRateProvider.getRate("USD", "EUR"))
-                .thenReturn(new FxQuote(new BigDecimal("0.9100"), RateSource.FALLBACK, originalFetch));
-        when(expenseRepository.save(any(Expense.class)))
-                .thenAnswer(
-                        inv -> {
-                            Expense e = inv.getArgument(0);
-                            e.setId(UUID.randomUUID());
-                            e.setCreatedAt(Instant.now());
-                            e.setUpdatedAt(Instant.now());
-                            return e;
-                        });
+  @Test
+  void create_fallbackRate_persistsSourceFALLBACK_withOriginalFetchedAt() {
+    UUID m1 = UUID.fromString(DEVICE_ID);
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.getTripMembers(TRIP_ID.toString()))
+        .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
+    Instant originalFetch = Instant.parse("2026-04-20T08:00:00Z");
+    when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
+    when(exchangeRateProvider.getRate("USD", "EUR"))
+        .thenReturn(new FxQuote(new BigDecimal("0.9100"), RateSource.FALLBACK, originalFetch));
+    when(expenseRepository.save(any(Expense.class)))
+        .thenAnswer(
+            inv -> {
+              Expense e = inv.getArgument(0);
+              e.setId(UUID.randomUUID());
+              e.setCreatedAt(Instant.now());
+              e.setUpdatedAt(Instant.now());
+              return e;
+            });
 
-        RecordExpenseRequest req =
-                RecordExpenseRequest.builder()
-                        .amount(new BigDecimal("10.0000"))
-                        .currency("USD")
-                        .category(ExpenseCategory.FOOD)
-                        .description("Fallback")
-                        .splitMode(SplitMode.EQUAL)
-                        .build();
+    RecordExpenseRequest req =
+        RecordExpenseRequest.builder()
+            .amount(new BigDecimal("10.0000"))
+            .currency("USD")
+            .category(ExpenseCategory.FOOD)
+            .description("Fallback")
+            .splitMode(SplitMode.EQUAL)
+            .build();
 
-        ExpenseResponse resp = service.recordExpense(TRIP_ID, DEVICE_ID, req);
+    ExpenseResponse resp = service.recordExpense(TRIP_ID, DEVICE_ID, req);
 
-        assertThat(resp.getRateSource()).isEqualTo(RateSource.FALLBACK);
-        assertThat(resp.getRateFetchedAt()).isEqualTo(originalFetch);
-    }
+    assertThat(resp.getRateSource()).isEqualTo(RateSource.FALLBACK);
+    assertThat(resp.getRateFetchedAt()).isEqualTo(originalFetch);
+  }
 
-    @Test
-    void create_rateUnavailable_propagatesException() {
-        UUID m1 = UUID.fromString(DEVICE_ID);
-        when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
-        when(tripClient.getTripMembers(TRIP_ID.toString()))
-                .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
-        when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
-        when(exchangeRateProvider.getRate("USD", "EUR"))
-                .thenThrow(new ExchangeRateUnavailableException("USD", "EUR"));
+  @Test
+  void create_rateUnavailable_propagatesException() {
+    UUID m1 = UUID.fromString(DEVICE_ID);
+    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.getTripMembers(TRIP_ID.toString()))
+        .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
+    when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
+    when(exchangeRateProvider.getRate("USD", "EUR"))
+        .thenThrow(new ExchangeRateUnavailableException("USD", "EUR"));
 
-        RecordExpenseRequest req =
-                RecordExpenseRequest.builder()
-                        .amount(new BigDecimal("10.0000"))
-                        .currency("USD")
-                        .category(ExpenseCategory.FOOD)
-                        .description("Unavailable")
-                        .splitMode(SplitMode.EQUAL)
-                        .build();
+    RecordExpenseRequest req =
+        RecordExpenseRequest.builder()
+            .amount(new BigDecimal("10.0000"))
+            .currency("USD")
+            .category(ExpenseCategory.FOOD)
+            .description("Unavailable")
+            .splitMode(SplitMode.EQUAL)
+            .build();
 
-        assertThatThrownBy(() -> service.recordExpense(TRIP_ID, DEVICE_ID, req))
-                .isInstanceOf(ExchangeRateUnavailableException.class);
+    assertThatThrownBy(() -> service.recordExpense(TRIP_ID, DEVICE_ID, req))
+        .isInstanceOf(ExchangeRateUnavailableException.class);
 
-        verify(expenseRepository, never()).save(any());
-    }
+    verify(expenseRepository, never()).save(any());
+  }
 
-    private Expense buildExpense(UUID tripId) {
-        return Expense.builder()
-                .id(UUID.randomUUID())
-                .tripId(tripId)
-                .paidBy(UUID.fromString(DEVICE_ID))
-                .amount(new BigDecimal("10.00"))
-                .currency("EUR")
-                .category(ExpenseCategory.FOOD)
-                .description("Test")
-                .splitMode(SplitMode.EQUAL)
-                .createdAt(Instant.now())
-                .updatedAt(Instant.now())
-                .splits(new ArrayList<>())
-                .build();
-    }
+  private Expense buildExpense(UUID tripId) {
+    return Expense.builder()
+        .id(UUID.randomUUID())
+        .tripId(tripId)
+        .paidBy(UUID.fromString(DEVICE_ID))
+        .amount(new BigDecimal("10.00"))
+        .currency("EUR")
+        .category(ExpenseCategory.FOOD)
+        .description("Test")
+        .splitMode(SplitMode.EQUAL)
+        .createdAt(Instant.now())
+        .updatedAt(Instant.now())
+        .splits(new ArrayList<>())
+        .build();
+  }
 }

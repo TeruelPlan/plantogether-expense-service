@@ -24,28 +24,35 @@ public class ExpenseEventPublisher {
 
     public ExpenseEventPublisher(RabbitTemplate rabbitTemplate, MeterRegistry meterRegistry) {
         this.rabbitTemplate = rabbitTemplate;
-        this.publishFailures = Counter.builder("expense_event_publish_failures_total")
-                .description("Number of expense event publish failures (post-commit, broker-side)")
-                .tag("service", "expense-service")
-                .register(meterRegistry);
+        this.publishFailures =
+                Counter.builder("expense_event_publish_failures_total")
+                        .description("Number of expense event publish failures (post-commit, broker-side)")
+                        .tag("service", "expense-service")
+                        .register(meterRegistry);
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void publishExpenseCreated(ExpenseCreatedInternalEvent internal) {
-        ExpenseCreatedEvent event = ExpenseCreatedEvent.builder()
-                .expenseId(internal.expenseId())
-                .tripId(internal.tripId())
-                .paidByDeviceId(internal.paidByDeviceId())
-                .amount(internal.amount())
-                .description(internal.description())
-                .createdAt(internal.createdAt())
-                .build();
+        ExpenseCreatedEvent event =
+                ExpenseCreatedEvent.builder()
+                        .expenseId(internal.expenseId())
+                        .tripId(internal.tripId())
+                        .paidByDeviceId(internal.paidByDeviceId())
+                        .amount(internal.amount())
+                        .description(internal.description())
+                        .createdAt(internal.createdAt())
+                        .build();
         try {
-            rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE, RabbitConfig.ROUTING_KEY_EXPENSE_CREATED, event);
+            rabbitTemplate.convertAndSend(
+                    RabbitConfig.EXCHANGE, RabbitConfig.ROUTING_KEY_EXPENSE_CREATED, event);
         } catch (AmqpException ex) {
             publishFailures.increment();
-            log.warn("Failed to publish expense.created (expenseId={}, tripId={}): {}",
-                    internal.expenseId(), internal.tripId(), ex.getMessage(), ex);
+            log.warn(
+                    "Failed to publish expense.created (expenseId={}, tripId={}): {}",
+                    internal.expenseId(),
+                    internal.tripId(),
+                    ex.getMessage(),
+                    ex);
         }
     }
 

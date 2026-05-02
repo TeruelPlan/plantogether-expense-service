@@ -40,8 +40,9 @@ class ExpenseEventPublisherTest {
         String deviceId = UUID.randomUUID().toString();
         Instant now = Instant.now();
 
-        ExpenseCreatedInternalEvent internal = new ExpenseCreatedInternalEvent(
-                expenseId, tripId, deviceId, new BigDecimal("99.99"), "Dinner", now);
+        ExpenseCreatedInternalEvent internal =
+                new ExpenseCreatedInternalEvent(
+                        expenseId, tripId, deviceId, new BigDecimal("99.99"), "Dinner", now);
 
         publisher.publishExpenseCreated(internal);
 
@@ -49,10 +50,9 @@ class ExpenseEventPublisherTest {
         ArgumentCaptor<String> exchangeCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> routingKeyCaptor = ArgumentCaptor.forClass(String.class);
 
-        verify(rabbitTemplate).convertAndSend(
-                exchangeCaptor.capture(),
-                routingKeyCaptor.capture(),
-                messageCaptor.capture());
+        verify(rabbitTemplate)
+                .convertAndSend(
+                        exchangeCaptor.capture(), routingKeyCaptor.capture(), messageCaptor.capture());
 
         assertThat(exchangeCaptor.getValue()).isEqualTo(RabbitConfig.EXCHANGE);
         assertThat(routingKeyCaptor.getValue()).isEqualTo(RabbitConfig.ROUTING_KEY_EXPENSE_CREATED);

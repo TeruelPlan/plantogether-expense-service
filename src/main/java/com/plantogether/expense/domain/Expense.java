@@ -75,7 +75,11 @@ public class Expense {
     @Column(name = "rate_fetched_at", nullable = false)
     private Instant rateFetchedAt;
 
-    @OneToMany(mappedBy = "expense", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @OneToMany(
+            mappedBy = "expense",
+            cascade = CascadeType.ALL,
+            orphanRemoval = true,
+            fetch = FetchType.LAZY)
     @Builder.Default
     private List<ExpenseSplit> splits = new ArrayList<>();
 

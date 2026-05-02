@@ -40,10 +40,9 @@ public class ExpenseController {
             Authentication auth,
             @PathVariable UUID tripId,
             @PageableDefault(size = 20) Pageable pageable) {
-        Pageable safePageable = PageRequest.of(
-                pageable.getPageNumber(),
-                Math.min(pageable.getPageSize(), MAX_PAGE_SIZE),
-                FIXED_SORT);
+        Pageable safePageable =
+                PageRequest.of(
+                        pageable.getPageNumber(), Math.min(pageable.getPageSize(), MAX_PAGE_SIZE), FIXED_SORT);
         return expenseService.listExpenses(tripId, auth.getName(), safePageable);
     }
 }

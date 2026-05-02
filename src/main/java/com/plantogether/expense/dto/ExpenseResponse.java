@@ -40,10 +40,11 @@ public class ExpenseResponse {
     private Instant rateFetchedAt;
 
     public static ExpenseResponse from(Expense entity) {
-        List<SplitOutput> splits = entity.getSplits().stream()
-                .sorted(Comparator.comparing(s -> s.getDeviceId().toString()))
-                .map(s -> new SplitOutput(s.getDeviceId(), s.getShareAmount()))
-                .toList();
+        List<SplitOutput> splits =
+                entity.getSplits().stream()
+                        .sorted(Comparator.comparing(s -> s.getDeviceId().toString()))
+                        .map(s -> new SplitOutput(s.getDeviceId(), s.getShareAmount()))
+                        .toList();
 
         return ExpenseResponse.builder()
                 .id(entity.getId())

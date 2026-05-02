@@ -1,8 +1,8 @@
 package com.plantogether.expense.fx;
 
 /**
- * Thrown when the FX provider is unreachable AND no cached or last-known rate
- * exists for the requested currency pair. Maps to HTTP 503 in the global handler.
+ * Thrown when the FX provider is unreachable AND no cached or last-known rate exists for the
+ * requested currency pair. Maps to HTTP 503 in the global handler.
  */
 public class ExchangeRateUnavailableException extends RuntimeException {
 

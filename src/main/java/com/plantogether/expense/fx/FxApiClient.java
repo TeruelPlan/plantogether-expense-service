@@ -14,11 +14,11 @@ import java.math.RoundingMode;
 import java.time.Duration;
 
 /**
- * Thin RestClient wrapper for the Frankfurter FX API
- * (https://api.frankfurter.app — keyless, ECB-backed).
+ * Thin RestClient wrapper for the Frankfurter FX API (https://api.frankfurter.app — keyless,
+ * ECB-backed).
  *
- * <p>Endpoint: {@code GET /latest?from={BASE}&to={QUOTE}}.
- * Response: {@code {"amount":1,"base":"EUR","date":"...","rates":{"USD":1.08}}}.
+ * <p>Endpoint: {@code GET /latest?from={BASE}&to={QUOTE}}. Response: {@code
+ * {"amount":1,"base":"EUR","date":"...","rates":{"USD":1.08}}}.
  */
 @Slf4j
 @Component
@@ -30,10 +30,7 @@ public class FxApiClient {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout((int) Duration.ofSeconds(1).toMillis());
         factory.setReadTimeout((int) Duration.ofSeconds(2).toMillis());
-        this.restClient = RestClient.builder()
-                .baseUrl(baseUrl)
-                .requestFactory(factory)
-                .build();
+        this.restClient = RestClient.builder().baseUrl(baseUrl).requestFactory(factory).build();
     }
 
     /**
@@ -44,16 +41,23 @@ public class FxApiClient {
      * @throws RestClientException              on transport failure / timeout / 5xx (caller handles fallback)
      */
     public BigDecimal fetch(String base, String quote) {
-        JsonNode body = restClient.get()
-                .uri(uriBuilder -> uriBuilder.path("/latest")
+        JsonNode body =
+                restClient
+                        .get()
+                        .uri(
+                                uriBuilder ->
+                                        uriBuilder
+                                                .path("/latest")
                         .queryParam("from", base)
-                        .queryParam("to", quote)
-                        .build())
-                .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {
-                    throw new ExchangeRateUnavailableException(base, quote);
-                })
-                .body(JsonNode.class);
+                                                .queryParam("to", quote)
+                                                .build())
+                        .retrieve()
+                        .onStatus(
+                                HttpStatusCode::is4xxClientError,
+                                (req, resp) -> {
+                                    throw new ExchangeRateUnavailableException(base, quote);
+                                })
+                        .body(JsonNode.class);
 
         if (body == null || !body.has("rates") || !body.get("rates").has(quote)) {
             throw new ExchangeRateUnavailableException(base, quote);

@@ -21,12 +21,8 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class CachedExchangeRateProviderTest {
@@ -66,9 +62,8 @@ class CachedExchangeRateProviderTest {
     void cacheHit_returnsCached_withSourceCACHED() throws Exception {
         stubValueOps();
         Instant cachedAt = Instant.parse("2026-04-28T07:00:00Z");
-        String json = objectMapper.writeValueAsString(Map.of(
-                "rate", "1.0823",
-                "fetchedAt", cachedAt.toString()));
+        String json =
+                objectMapper.writeValueAsString(Map.of("rate", "1.0823", "fetchedAt", cachedAt.toString()));
         when(valueOps.get("fx:EUR:USD")).thenReturn(json);
 
         FxQuote quote = provider.getRate("EUR", "USD");
@@ -98,12 +93,13 @@ class CachedExchangeRateProviderTest {
     void apiDown_lastKnownExists_returnsFallback() throws Exception {
         stubValueOps();
         Instant lastFetched = Instant.parse("2026-04-20T10:00:00Z");
-        String json = objectMapper.writeValueAsString(Map.of(
-                "rate", "1.0500",
-                "fetchedAt", lastFetched.toString()));
+        String json =
+                objectMapper.writeValueAsString(
+                        Map.of("rate", "1.0500", "fetchedAt", lastFetched.toString()));
         when(valueOps.get("fx:EUR:USD")).thenReturn(null);
         when(valueOps.get("fx:last:EUR:USD")).thenReturn(json);
-        when(fxApiClient.fetch("EUR", "USD")).thenThrow(new ResourceAccessException("connect timed out"));
+        when(fxApiClient.fetch("EUR", "USD"))
+                .thenThrow(new ResourceAccessException("connect timed out"));
 
         FxQuote quote = provider.getRate("EUR", "USD");
 

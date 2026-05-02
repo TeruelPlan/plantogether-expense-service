@@ -4,9 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.plantogether.expense.domain.RateSource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.dao.DataAccessException;
 import org.springframework.web.client.RestClientException;
 
 import java.math.BigDecimal;
@@ -19,12 +19,13 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * FX provider that reads from Redis first and falls back through:
+ *
  * <ol>
- *   <li>same-currency identity ({@link RateSource#LIVE})</li>
- *   <li>fresh TTL-bounded cache key {@code fx:{BASE}:{QUOTE}} ({@link RateSource#CACHED})</li>
- *   <li>live FX provider (writes both keys, returns {@link RateSource#LIVE})</li>
- *   <li>unbounded mirror {@code fx:last:{BASE}:{QUOTE}} ({@link RateSource#FALLBACK})</li>
- *   <li>{@link ExchangeRateUnavailableException} (HTTP 503)</li>
+ *   <li>same-currency identity ({@link RateSource#LIVE})
+ *   <li>fresh TTL-bounded cache key {@code fx:{BASE}:{QUOTE}} ({@link RateSource#CACHED})
+ *   <li>live FX provider (writes both keys, returns {@link RateSource#LIVE})
+ *   <li>unbounded mirror {@code fx:last:{BASE}:{QUOTE}} ({@link RateSource#FALLBACK})
+ *   <li>{@link ExchangeRateUnavailableException} (HTTP 503)
  * </ol>
  */
 @Slf4j
@@ -56,9 +57,8 @@ public class CachedExchangeRateProvider implements ExchangeRateProvider {
     @Override
     public FxQuote getRate(String baseCurrency, String quoteCurrency) {
         if (baseCurrency.equals(quoteCurrency)) {
-            return new FxQuote(BigDecimal.ONE.setScale(4, RoundingMode.HALF_UP),
-                    RateSource.LIVE,
-                    clock.instant());
+            return new FxQuote(
+                    BigDecimal.ONE.setScale(4, RoundingMode.HALF_UP), RateSource.LIVE, clock.instant());
         }
 
         String key = KEY_PREFIX + baseCurrency + ":" + quoteCurrency;
@@ -78,11 +78,9 @@ public class CachedExchangeRateProvider implements ExchangeRateProvider {
             writePayload(key, payload, cacheTtl);
             writePayload(lastKey, payload, null);
             return new FxQuote(scale4(rate), RateSource.LIVE, now);
-        } catch (ExchangeRateUnavailableException ex) {
-            // 4xx from provider — currency pair unknown, no point falling back.
-            throw ex;
         } catch (RestClientException ex) {
-            log.warn("FX provider unavailable for {}->{}: {}", baseCurrency, quoteCurrency, ex.getMessage());
+            log.warn(
+                    "FX provider unavailable for {}->{}: {}", baseCurrency, quoteCurrency, ex.getMessage());
             // 3. Last-known mirror fallback.
             FxPayload last = readPayload(lastKey);
             if (last != null) {
@@ -116,9 +114,11 @@ public class CachedExchangeRateProvider implements ExchangeRateProvider {
 
     private void writePayload(String key, FxPayload payload, Duration ttl) {
         try {
-            String json = objectMapper.writeValueAsString(Map.of(
-                    "rate", payload.rate().toPlainString(),
-                    "fetchedAt", payload.fetchedAt().toString()));
+            String json =
+                    objectMapper.writeValueAsString(
+                            Map.of(
+                                    "rate", payload.rate().toPlainString(),
+                                    "fetchedAt", payload.fetchedAt().toString()));
             if (ttl != null) {
                 redisTemplate.opsForValue().set(key, json, ttl.toSeconds(), TimeUnit.SECONDS);
             } else {

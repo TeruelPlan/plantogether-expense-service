@@ -78,6 +78,22 @@
             <artifactId>plantogether-common</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.plantogether</groupId>
+            <artifactId>plantogether-proto</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty-shaded</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
@@ -102,6 +118,11 @@
             <groupId>com.plantogether</groupId>
             <artifactId>plantogether-common</artifactId>
             <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-testing</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

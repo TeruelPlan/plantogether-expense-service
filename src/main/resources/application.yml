@@ -30,6 +30,16 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+grpc:
+  trip-service:
+    host: ${TRIP_SERVICE_GRPC_HOST:localhost}
+    port: ${TRIP_SERVICE_GRPC_PORT:9081}
+
+fx:
+  provider:
+    url: ${FX_PROVIDER_URL:https://api.frankfurter.app}
+    cache-ttl-hours: ${FX_CACHE_TTL_HOURS:24}
+
 management:
   endpoints:
     web:

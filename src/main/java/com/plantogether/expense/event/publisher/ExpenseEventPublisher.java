@@ -86,7 +86,7 @@ public class ExpenseEventPublisher {
   public record ExpenseDeletedInternalEvent(
       UUID expenseId,
       UUID tripId,
-      String paidByDeviceId,
-      String deletedByDeviceId,
+      UUID paidByDeviceId,
+      UUID deletedByDeviceId,
       Instant deletedAt) {}
 }

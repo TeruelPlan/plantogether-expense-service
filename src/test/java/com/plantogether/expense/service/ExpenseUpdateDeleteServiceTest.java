@@ -115,6 +115,8 @@ class ExpenseUpdateDeleteServiceTest {
   void update_byPayer_savesAndReturnsResponse() {
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID))
         .thenReturn(Optional.of(existingExpense()));
+    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_ID.toString()))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT));
     stubMembersAndFx();
     when(expenseRepository.save(any(Expense.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -123,7 +125,21 @@ class ExpenseUpdateDeleteServiceTest {
     assertThat(resp.getAmount()).isEqualByComparingTo("90.00");
     assertThat(resp.getDescription()).isEqualTo("New description");
     assertThat(resp.getCategory()).isEqualTo(ExpenseCategory.ACCOMMODATION);
-    verify(tripClient, never()).requireMembership(any(), any());
+    // Membership gate is now mandatory even for the payer (former-member regression guard).
+    verify(tripClient).requireMembership(TRIP_ID.toString(), PAYER_ID.toString());
+  }
+
+  @Test
+  void update_byFormerPayerRemovedFromTrip_throwsAccessDenied() {
+    when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID))
+        .thenReturn(Optional.of(existingExpense()));
+    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_ID.toString()))
+        .thenThrow(new AccessDeniedException("Unable to verify trip membership"));
+
+    assertThatThrownBy(() -> service.updateExpense(EXPENSE_ID, PAYER_ID.toString(), validUpdate()))
+        .isInstanceOf(AccessDeniedException.class);
+
+    verify(expenseRepository, never()).save(any());
   }
 
   @Test
@@ -215,6 +231,8 @@ class ExpenseUpdateDeleteServiceTest {
   void delete_byPayer_softDeletesAndPublishesEvent() {
     Expense expense = existingExpense();
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID)).thenReturn(Optional.of(expense));
+    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_ID.toString()))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT));
 
     service.deleteExpense(EXPENSE_ID, PAYER_ID.toString());
 
@@ -226,8 +244,8 @@ class ExpenseUpdateDeleteServiceTest {
     verify(eventPublisher).publishEvent(evt.capture());
     assertThat(evt.getValue().expenseId()).isEqualTo(EXPENSE_ID);
     assertThat(evt.getValue().tripId()).isEqualTo(TRIP_ID);
-    assertThat(evt.getValue().paidByDeviceId()).isEqualTo(PAYER_ID.toString());
-    assertThat(evt.getValue().deletedByDeviceId()).isEqualTo(PAYER_ID.toString());
+    assertThat(evt.getValue().paidByDeviceId()).isEqualTo(PAYER_ID);
+    assertThat(evt.getValue().deletedByDeviceId()).isEqualTo(PAYER_ID);
   }
 
   @Test

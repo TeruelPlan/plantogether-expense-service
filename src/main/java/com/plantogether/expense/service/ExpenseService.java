@@ -37,6 +37,8 @@ import org.springframework.web.server.ResponseStatusException;
 @RequiredArgsConstructor
 public class ExpenseService {
 
+  private static final BigDecimal SPLIT_SUM_TOLERANCE = new BigDecimal("0.01");
+
   private final ExpenseRepository expenseRepository;
   private final TripClient tripClient;
   private final ApplicationEventPublisher eventPublisher;
@@ -139,6 +141,8 @@ public class ExpenseService {
     newSplits.forEach(expense::addSplit);
 
     Expense saved = expenseRepository.save(expense);
+    // TODO(5.4): @CacheEvict(cacheNames="balance", key="#expense.tripId") once 5.4 introduces
+    //            the Redis balance cache.
     return ExpenseResponse.from(saved);
   }
 
@@ -154,32 +158,33 @@ public class ExpenseService {
     Instant deletedAt = Instant.now();
     expense.setDeletedAt(deletedAt);
     expenseRepository.save(expense);
+    // TODO(5.4): @CacheEvict(cacheNames="balance", key="#expense.tripId") once 5.4 introduces
+    //            the Redis balance cache.
 
     eventPublisher.publishEvent(
         new ExpenseDeletedInternalEvent(
             expense.getId(),
             expense.getTripId(),
-            expense.getPaidBy().toString(),
-            deviceId,
+            expense.getPaidBy(),
+            UUID.fromString(deviceId),
             deletedAt));
   }
 
   /**
-   * Authorizes a modify (edit/delete) operation: the caller must be the original payer OR the trip
-   * ORGANIZER. Verifies trip membership in the same gRPC round-trip via {@link
-   * TripClient#requireMembership}.
+   * Authorizes a modify (edit/delete) operation: the caller must currently be a trip member AND
+   * either the original payer OR the trip ORGANIZER. The membership gate runs unconditionally so a
+   * former member who happens to be the original payer can no longer mutate the expense after being
+   * removed from the trip.
    */
   private void assertCanModify(Expense expense, String deviceId) {
-    if (deviceId.equals(expense.getPaidBy().toString())) {
-      return;
-    }
     TripMembership membership;
     try {
       membership = tripClient.requireMembership(expense.getTripId().toString(), deviceId);
     } catch (StatusRuntimeException ex) {
       throw mapGrpcException(ex);
     }
-    if (membership.role() != Role.ORGANIZER) {
+    boolean isPayer = deviceId.equals(expense.getPaidBy().toString());
+    if (!isPayer && membership.role() != Role.ORGANIZER) {
       throw new AccessDeniedException(
           "Only the payer or the trip organizer can modify this expense");
     }
@@ -299,13 +304,14 @@ public class ExpenseService {
       return convertPercentagesToShares(inputs, amount);
     }
 
-    // CUSTOM
+    // CUSTOM — tolerate ±0.01 (BigDecimal compareTo, never equals)
     BigDecimal sum =
         inputs.stream()
             .map(RecordExpenseRequest.SplitInput::getShareAmount)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
-    if (sum.compareTo(amount) != 0) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "CUSTOM splits must sum to amount");
+    if (sum.subtract(amount).abs().compareTo(SPLIT_SUM_TOLERANCE) > 0) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST, "CUSTOM splits must sum to amount within ±0.01");
     }
     return inputs.stream()
         .map(

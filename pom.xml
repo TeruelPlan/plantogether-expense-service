@@ -24,8 +24,8 @@
     <properties>
         <plantogether-bom.version>1.6.1</plantogether-bom.version>
         <!-- Story 5.3: override BOM-pinned plantogether-common to pick up ExpenseDeletedEvent.
-             Reset to BOM-managed version after plantogether-common 1.14.0 is released and the BOM bumped. -->
-        <plantogether-common.version>1.14.0-SNAPSHOT</plantogether-common.version>
+             Reset to BOM-managed version after plantogether-common 1.13.0 is released and the BOM bumped. -->
+        <plantogether-common.version>1.13.0-SNAPSHOT</plantogether-common.version>
     </properties>
 
 

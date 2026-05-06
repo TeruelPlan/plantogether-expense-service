@@ -40,11 +40,34 @@ public class UpdateExpenseRequest {
   private String description;
 
   @Size(max = 500)
+  @Pattern(
+      regexp = "^trips/[0-9a-fA-F-]{36}/EXPENSE_RECEIPT/[0-9a-fA-F-]{36}.*$",
+      message = "receiptKey must match the trip receipt prefix")
   private String receiptKey;
 
   @NotNull private SplitMode splitMode;
 
+  @NotNull
+  @NotEmpty
   @Valid
-  @Size(min = 1, message = "splits, if provided, must not be empty")
+  @Size(min = 1, message = "splits must not be empty")
   private List<RecordExpenseRequest.SplitInput> splits;
+
+  /**
+   * Cross-field invariant: for CUSTOM splits, the sum of share amounts must equal {@link #amount}
+   * within ±0.01. PERCENTAGE and EQUAL bypass this check (server expands them). Uses {@code
+   * BigDecimal#compareTo}, never {@code equals}.
+   */
+  @AssertTrue(message = "sum of CUSTOM splits must equal amount within ±0.01")
+  public boolean isSplitsSumValid() {
+    if (splitMode != SplitMode.CUSTOM || splits == null || splits.isEmpty() || amount == null) {
+      return true;
+    }
+    BigDecimal sum =
+        splits.stream()
+            .map(RecordExpenseRequest.SplitInput::getShareAmount)
+            .filter(java.util.Objects::nonNull)
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
+    return sum.subtract(amount).abs().compareTo(new BigDecimal("0.01")) <= 0;
+  }
 }

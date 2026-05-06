@@ -24,8 +24,8 @@ class ExpenseDeletedEventPublisherTest {
 
     UUID expenseId = UUID.randomUUID();
     UUID tripId = UUID.randomUUID();
-    String payer = UUID.randomUUID().toString();
-    String deletedBy = UUID.randomUUID().toString();
+    UUID payer = UUID.randomUUID();
+    UUID deletedBy = UUID.randomUUID();
     Instant when = Instant.now();
 
     publisher.publishExpenseDeleted(

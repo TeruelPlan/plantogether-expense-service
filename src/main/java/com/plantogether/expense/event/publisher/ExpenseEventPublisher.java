@@ -1,6 +1,7 @@
 package com.plantogether.expense.event.publisher;
 
 import com.plantogether.common.event.ExpenseCreatedEvent;
+import com.plantogether.common.event.ExpenseDeletedEvent;
 import com.plantogether.expense.config.RabbitConfig;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -41,15 +42,34 @@ public class ExpenseEventPublisher {
             .description(internal.description())
             .createdAt(internal.createdAt())
             .build();
+    publish(
+        RabbitConfig.ROUTING_KEY_EXPENSE_CREATED, event, internal.expenseId(), internal.tripId());
+  }
+
+  @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+  public void publishExpenseDeleted(ExpenseDeletedInternalEvent internal) {
+    ExpenseDeletedEvent event =
+        ExpenseDeletedEvent.builder()
+            .expenseId(internal.expenseId())
+            .tripId(internal.tripId())
+            .paidByDeviceId(internal.paidByDeviceId())
+            .deletedByDeviceId(internal.deletedByDeviceId())
+            .deletedAt(internal.deletedAt())
+            .build();
+    publish(
+        RabbitConfig.ROUTING_KEY_EXPENSE_DELETED, event, internal.expenseId(), internal.tripId());
+  }
+
+  private void publish(String routingKey, Object event, UUID expenseId, UUID tripId) {
     try {
-      rabbitTemplate.convertAndSend(
-          RabbitConfig.EXCHANGE, RabbitConfig.ROUTING_KEY_EXPENSE_CREATED, event);
+      rabbitTemplate.convertAndSend(RabbitConfig.EXCHANGE, routingKey, event);
     } catch (AmqpException ex) {
       publishFailures.increment();
       log.warn(
-          "Failed to publish expense.created (expenseId={}, tripId={}): {}",
-          internal.expenseId(),
-          internal.tripId(),
+          "Failed to publish {} (expenseId={}, tripId={}): {}",
+          routingKey,
+          expenseId,
+          tripId,
           ex.getMessage(),
           ex);
     }
@@ -62,4 +82,11 @@ public class ExpenseEventPublisher {
       BigDecimal amount,
       String description,
       Instant createdAt) {}
+
+  public record ExpenseDeletedInternalEvent(
+      UUID expenseId,
+      UUID tripId,
+      String paidByDeviceId,
+      String deletedByDeviceId,
+      Instant deletedAt) {}
 }

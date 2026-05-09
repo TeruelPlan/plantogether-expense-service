@@ -73,9 +73,10 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
-            ghcr.io/teruelplan/${{ github.event.repository.name }}:${{ inputs.releaseVersion }}
-            ghcr.io/teruelplan/${{ github.event.repository.name }}:latest
+            ghcr.io/teruelplan/plantogether-packages/${{ github.event.repository.name }}:${{ inputs.releaseVersion }}
+            ghcr.io/teruelplan/plantogether-packages/${{ github.event.repository.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

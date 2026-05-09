@@ -11,7 +11,7 @@ COPY src ./src
 RUN --mount=type=secret,id=github_actor \
     --mount=type=secret,id=github_token \
     GITHUB_ACTOR=$(cat /run/secrets/github_actor) \
-    GITHUB_TOKEN=$(cat /run/secrets/github_token) \
+    PACKAGES_TOKEN=$(cat /run/secrets/github_token) \
     mvn -s .settings.xml -e -B package -DskipTests
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────────────────

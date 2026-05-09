@@ -1,13 +1,19 @@
 package com.plantogether.expense.service;
 
 import com.plantogether.common.exception.AccessDeniedException;
+import com.plantogether.common.exception.ResourceNotFoundException;
+import com.plantogether.common.grpc.Role;
 import com.plantogether.common.grpc.TripClient;
 import com.plantogether.common.grpc.TripMember;
+import com.plantogether.common.grpc.TripMembership;
 import com.plantogether.expense.domain.Expense;
 import com.plantogether.expense.domain.ExpenseSplit;
+import com.plantogether.expense.domain.SplitMode;
 import com.plantogether.expense.dto.ExpenseResponse;
 import com.plantogether.expense.dto.RecordExpenseRequest;
+import com.plantogether.expense.dto.UpdateExpenseRequest;
 import com.plantogether.expense.event.publisher.ExpenseEventPublisher.ExpenseCreatedInternalEvent;
+import com.plantogether.expense.event.publisher.ExpenseEventPublisher.ExpenseDeletedInternalEvent;
 import com.plantogether.expense.fx.ExchangeRateProvider;
 import com.plantogether.expense.fx.ExchangeRateProvider.FxQuote;
 import com.plantogether.expense.repository.ExpenseRepository;
@@ -15,6 +21,7 @@ import com.plantogether.expense.validation.AllowedCurrenciesValidator;
 import io.grpc.StatusRuntimeException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
@@ -29,6 +36,8 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 @RequiredArgsConstructor
 public class ExpenseService {
+
+  private static final BigDecimal SPLIT_SUM_TOLERANCE = new BigDecimal("0.01");
 
   private final ExpenseRepository expenseRepository;
   private final TripClient tripClient;
@@ -51,26 +60,10 @@ public class ExpenseService {
 
     String description = sanitizeDescription(req.getDescription());
 
-    List<ExpenseSplit> splits = resolveSplits(req, memberIds);
+    List<ExpenseSplit> splits =
+        resolveSplits(req.getAmount(), req.getSplitMode(), req.getSplits(), memberIds);
 
-    // Multi-currency: snapshot the FX rate at entry time. Values are immutable after creation.
-    String referenceCurrency;
-    try {
-      referenceCurrency = tripClient.getTripCurrency(tripId.toString());
-    } catch (StatusRuntimeException ex) {
-      throw mapGrpcException(ex);
-    }
-    if (referenceCurrency == null
-        || referenceCurrency.isBlank()
-        || !AllowedCurrenciesValidator.SUPPORTED.contains(referenceCurrency)) {
-      throw new ResponseStatusException(
-          HttpStatus.SERVICE_UNAVAILABLE,
-          "Trip reference currency is unavailable or unsupported: " + referenceCurrency);
-    }
-    FxQuote fx = exchangeRateProvider.getRate(req.getCurrency(), referenceCurrency);
-    BigDecimal exchangeRate = fx.rate().setScale(4, RoundingMode.HALF_UP);
-    BigDecimal amountInReferenceCurrency =
-        req.getAmount().multiply(exchangeRate).setScale(4, RoundingMode.HALF_UP);
+    FxSnapshot fx = snapshotFx(tripId, req.getCurrency(), req.getAmount());
 
     Expense expense =
         Expense.builder()
@@ -82,11 +75,11 @@ public class ExpenseService {
             .description(description)
             .receiptKey(req.getReceiptKey())
             .splitMode(req.getSplitMode())
-            .exchangeRate(exchangeRate)
-            .amountInReferenceCurrency(amountInReferenceCurrency)
-            .referenceCurrency(referenceCurrency)
-            .rateSource(fx.source())
-            .rateFetchedAt(fx.fetchedAt())
+            .exchangeRate(fx.exchangeRate)
+            .amountInReferenceCurrency(fx.amountInReferenceCurrency)
+            .referenceCurrency(fx.referenceCurrency)
+            .rateSource(fx.rateSource)
+            .rateFetchedAt(fx.rateFetchedAt)
             .build();
 
     splits.forEach(expense::addSplit);
@@ -115,6 +108,88 @@ public class ExpenseService {
         .map(ExpenseResponse::from);
   }
 
+  @Transactional
+  public ExpenseResponse updateExpense(UUID expenseId, String deviceId, UpdateExpenseRequest req) {
+    Expense expense =
+        expenseRepository
+            .findByIdAndDeletedAtIsNull(expenseId)
+            .orElseThrow(() -> new ResourceNotFoundException("Expense", expenseId));
+
+    assertCanModify(expense, deviceId);
+
+    Set<UUID> memberIds = loadTripMemberIds(expense.getTripId());
+
+    String description = sanitizeDescription(req.getDescription());
+    List<ExpenseSplit> newSplits =
+        resolveSplits(req.getAmount(), req.getSplitMode(), req.getSplits(), memberIds);
+
+    FxSnapshot fx = snapshotFx(expense.getTripId(), req.getCurrency(), req.getAmount());
+
+    expense.setAmount(req.getAmount());
+    expense.setCurrency(req.getCurrency());
+    expense.setCategory(req.getCategory());
+    expense.setDescription(description);
+    expense.setReceiptKey(req.getReceiptKey());
+    expense.setSplitMode(req.getSplitMode());
+    expense.setExchangeRate(fx.exchangeRate);
+    expense.setAmountInReferenceCurrency(fx.amountInReferenceCurrency);
+    expense.setReferenceCurrency(fx.referenceCurrency);
+    expense.setRateSource(fx.rateSource);
+    expense.setRateFetchedAt(fx.rateFetchedAt);
+
+    expense.getSplits().clear();
+    newSplits.forEach(expense::addSplit);
+
+    Expense saved = expenseRepository.save(expense);
+    // TODO(5.4): @CacheEvict(cacheNames="balance", key="#expense.tripId") once 5.4 introduces
+    //            the Redis balance cache.
+    return ExpenseResponse.from(saved);
+  }
+
+  @Transactional
+  public void deleteExpense(UUID expenseId, String deviceId) {
+    Expense expense =
+        expenseRepository
+            .findByIdAndDeletedAtIsNull(expenseId)
+            .orElseThrow(() -> new ResourceNotFoundException("Expense", expenseId));
+
+    assertCanModify(expense, deviceId);
+
+    Instant deletedAt = Instant.now();
+    expense.setDeletedAt(deletedAt);
+    expenseRepository.save(expense);
+    // TODO(5.4): @CacheEvict(cacheNames="balance", key="#expense.tripId") once 5.4 introduces
+    //            the Redis balance cache.
+
+    eventPublisher.publishEvent(
+        new ExpenseDeletedInternalEvent(
+            expense.getId(),
+            expense.getTripId(),
+            expense.getPaidBy(),
+            UUID.fromString(deviceId),
+            deletedAt));
+  }
+
+  /**
+   * Authorizes a modify (edit/delete) operation: the caller must currently be a trip member AND
+   * either the original payer OR the trip ORGANIZER. The membership gate runs unconditionally so a
+   * former member who happens to be the original payer can no longer mutate the expense after being
+   * removed from the trip.
+   */
+  private void assertCanModify(Expense expense, String deviceId) {
+    TripMembership membership;
+    try {
+      membership = tripClient.requireMembership(expense.getTripId().toString(), deviceId);
+    } catch (StatusRuntimeException ex) {
+      throw mapGrpcException(ex);
+    }
+    boolean isPayer = deviceId.equals(expense.getPaidBy().toString());
+    if (!isPayer && membership.role() != Role.ORGANIZER) {
+      throw new AccessDeniedException(
+          "Only the payer or the trip organizer can modify this expense");
+    }
+  }
+
   private Set<UUID> loadTripMemberIds(UUID tripId) {
     List<TripMember> members;
     try {
@@ -127,6 +202,28 @@ public class ExpenseService {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Trip not found or has no members");
     }
     return memberIds;
+  }
+
+  private FxSnapshot snapshotFx(UUID tripId, String currency, BigDecimal amount) {
+    String referenceCurrency;
+    try {
+      referenceCurrency = tripClient.getTripCurrency(tripId.toString());
+    } catch (StatusRuntimeException ex) {
+      throw mapGrpcException(ex);
+    }
+    if (referenceCurrency == null
+        || referenceCurrency.isBlank()
+        || !AllowedCurrenciesValidator.SUPPORTED.contains(referenceCurrency)) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "Trip reference currency is unavailable or unsupported: " + referenceCurrency);
+    }
+    FxQuote fx = exchangeRateProvider.getRate(currency, referenceCurrency);
+    BigDecimal exchangeRate = fx.rate().setScale(4, RoundingMode.HALF_UP);
+    BigDecimal amountInReferenceCurrency =
+        amount.multiply(exchangeRate).setScale(4, RoundingMode.HALF_UP);
+    return new FxSnapshot(
+        exchangeRate, amountInReferenceCurrency, referenceCurrency, fx.source(), fx.fetchedAt());
   }
 
   private static ResponseStatusException mapGrpcException(StatusRuntimeException ex) {
@@ -157,26 +254,30 @@ public class ExpenseService {
     return stripped;
   }
 
-  private List<ExpenseSplit> resolveSplits(RecordExpenseRequest req, Set<UUID> memberIds) {
-    if (req.getSplits() != null && !req.getSplits().isEmpty()) {
-      return resolveExplicitSplits(req, memberIds);
+  private List<ExpenseSplit> resolveSplits(
+      BigDecimal amount,
+      SplitMode splitMode,
+      List<RecordExpenseRequest.SplitInput> inputs,
+      Set<UUID> memberIds) {
+    if (inputs != null && !inputs.isEmpty()) {
+      return resolveExplicitSplits(amount, splitMode, inputs, memberIds);
     }
-
-    if (req.getSplitMode() == com.plantogether.expense.domain.SplitMode.EQUAL) {
-      return resolveEqualSplits(req.getAmount(), memberIds);
+    if (splitMode == SplitMode.EQUAL) {
+      return resolveEqualSplits(amount, memberIds);
     }
-
     throw new ResponseStatusException(
         HttpStatus.BAD_REQUEST, "CUSTOM and PERCENTAGE split modes require explicit splits");
   }
 
-  private List<ExpenseSplit> resolveExplicitSplits(RecordExpenseRequest req, Set<UUID> memberIds) {
-    if (req.getSplitMode() == com.plantogether.expense.domain.SplitMode.EQUAL) {
+  private List<ExpenseSplit> resolveExplicitSplits(
+      BigDecimal amount,
+      SplitMode splitMode,
+      List<RecordExpenseRequest.SplitInput> inputs,
+      Set<UUID> memberIds) {
+    if (splitMode == SplitMode.EQUAL) {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST, "EQUAL split mode must not include explicit splits");
     }
-
-    List<RecordExpenseRequest.SplitInput> inputs = req.getSplits();
 
     Set<UUID> seen = new HashSet<>();
     for (RecordExpenseRequest.SplitInput s : inputs) {
@@ -191,7 +292,7 @@ public class ExpenseService {
       }
     }
 
-    if (req.getSplitMode() == com.plantogether.expense.domain.SplitMode.PERCENTAGE) {
+    if (splitMode == SplitMode.PERCENTAGE) {
       BigDecimal pctSum =
           inputs.stream()
               .map(RecordExpenseRequest.SplitInput::getShareAmount)
@@ -200,16 +301,17 @@ public class ExpenseService {
         throw new ResponseStatusException(
             HttpStatus.BAD_REQUEST, "PERCENTAGE splits must sum to 100");
       }
-      return convertPercentagesToShares(inputs, req.getAmount());
+      return convertPercentagesToShares(inputs, amount);
     }
 
-    // CUSTOM
+    // CUSTOM — tolerate ±0.01 (BigDecimal compareTo, never equals)
     BigDecimal sum =
         inputs.stream()
             .map(RecordExpenseRequest.SplitInput::getShareAmount)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
-    if (sum.compareTo(req.getAmount()) != 0) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "CUSTOM splits must sum to amount");
+    if (sum.subtract(amount).abs().compareTo(SPLIT_SUM_TOLERANCE) > 0) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST, "CUSTOM splits must sum to amount within ±0.01");
     }
     return inputs.stream()
         .map(
@@ -266,4 +368,11 @@ public class ExpenseService {
             .build());
     return splits;
   }
+
+  private record FxSnapshot(
+      BigDecimal exchangeRate,
+      BigDecimal amountInReferenceCurrency,
+      String referenceCurrency,
+      com.plantogether.expense.domain.RateSource rateSource,
+      Instant rateFetchedAt) {}
 }

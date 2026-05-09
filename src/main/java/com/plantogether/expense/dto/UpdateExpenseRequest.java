@@ -47,11 +47,15 @@ public class UpdateExpenseRequest {
 
   @NotNull private SplitMode splitMode;
 
-  @NotNull
-  @NotEmpty
-  @Valid
-  @Size(min = 1, message = "splits must not be empty")
-  private List<RecordExpenseRequest.SplitInput> splits;
+  @Valid private List<RecordExpenseRequest.SplitInput> splits;
+
+  @AssertTrue(message = "splits must be provided for CUSTOM and PERCENTAGE split modes")
+  public boolean isSplitsProvidedWhenRequired() {
+    if (splitMode == SplitMode.EQUAL) {
+      return true;
+    }
+    return splits != null && !splits.isEmpty();
+  }
 
   /**
    * Cross-field invariant: for CUSTOM splits, the sum of share amounts must equal {@link #amount}

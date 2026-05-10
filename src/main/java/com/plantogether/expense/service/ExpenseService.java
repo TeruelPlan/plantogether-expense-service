@@ -23,7 +23,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.*;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -50,10 +49,12 @@ public class ExpenseService {
       throw new AccessDeniedException("Not a member of this trip");
     }
 
-    Set<UUID> memberIds = loadTripMemberIds(tripId);
+    java.util.Map<UUID, UUID> deviceToMember = loadTripMembers(tripId);
+    Set<UUID> memberIds = deviceToMember.keySet();
 
-    UUID paidBy = req.getPaidBy() != null ? req.getPaidBy() : UUID.fromString(deviceId);
-    if (!memberIds.contains(paidBy)) {
+    UUID rawPaidBy = req.getPaidBy() != null ? req.getPaidBy() : UUID.fromString(deviceId);
+    UUID paidBy = resolveToDeviceId(rawPaidBy, deviceToMember);
+    if (paidBy == null || !memberIds.contains(paidBy)) {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST, "paidBy must be a member of the trip");
     }
@@ -62,6 +63,7 @@ public class ExpenseService {
 
     List<ExpenseSplit> splits =
         resolveSplits(req.getAmount(), req.getSplitMode(), req.getSplits(), memberIds);
+    splits.forEach(s -> s.setTripMemberId(deviceToMember.get(s.getDeviceId())));
 
     FxSnapshot fx = snapshotFx(tripId, req.getCurrency(), req.getAmount());
 
@@ -69,6 +71,7 @@ public class ExpenseService {
         Expense.builder()
             .tripId(tripId)
             .paidBy(paidBy)
+            .paidByTripMemberId(deviceToMember.get(paidBy))
             .amount(req.getAmount())
             .currency(req.getCurrency())
             .category(req.getCategory())
@@ -117,11 +120,16 @@ public class ExpenseService {
 
     assertCanModify(expense, deviceId);
 
-    Set<UUID> memberIds = loadTripMemberIds(expense.getTripId());
+    java.util.Map<UUID, UUID> deviceToMember = loadTripMembers(expense.getTripId());
+    Set<UUID> memberIds = deviceToMember.keySet();
 
     String description = sanitizeDescription(req.getDescription());
     List<ExpenseSplit> newSplits =
         resolveSplits(req.getAmount(), req.getSplitMode(), req.getSplits(), memberIds);
+    newSplits.forEach(s -> s.setTripMemberId(deviceToMember.get(s.getDeviceId())));
+    if (expense.getPaidByTripMemberId() == null) {
+      expense.setPaidByTripMemberId(deviceToMember.get(expense.getPaidBy()));
+    }
 
     FxSnapshot fx = snapshotFx(expense.getTripId(), req.getCurrency(), req.getAmount());
 
@@ -191,17 +199,51 @@ public class ExpenseService {
   }
 
   private Set<UUID> loadTripMemberIds(UUID tripId) {
+    return loadTripMembers(tripId).keySet();
+  }
+
+  /**
+   * Resolves an identifier that may be either a device UUID or a trip_member_id back to its device
+   * UUID. Returns the input unchanged if it already matches a known device UUID; otherwise looks it
+   * up by trip_member_id. Returns {@code null} when neither match. This bridges the Phase 2
+   * transition where Flutter sends a {@code trip_member_id} as {@code paidBy} while persistence
+   * still keys on device UUID.
+   */
+  private UUID resolveToDeviceId(UUID candidate, java.util.Map<UUID, UUID> deviceToMember) {
+    if (candidate == null) {
+      return null;
+    }
+    if (deviceToMember.containsKey(candidate)) {
+      return candidate;
+    }
+    for (java.util.Map.Entry<UUID, UUID> e : deviceToMember.entrySet()) {
+      if (candidate.equals(e.getValue())) {
+        return e.getKey();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Returns a map keyed by device UUID mapping to the trip_member_id (UUID) for that device, or
+   * {@code null} when the trip-service has not yet populated the trip_member_id field.
+   */
+  private java.util.Map<UUID, UUID> loadTripMembers(UUID tripId) {
     List<TripMember> members;
     try {
       members = tripClient.getTripMembers(tripId.toString());
     } catch (StatusRuntimeException ex) {
       throw mapGrpcException(ex);
     }
-    Set<UUID> memberIds = members.stream().map(TripMember::deviceId).collect(Collectors.toSet());
-    if (memberIds.isEmpty()) {
+    if (members.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Trip not found or has no members");
     }
-    return memberIds;
+    java.util.Map<UUID, UUID> map = new java.util.LinkedHashMap<>();
+    for (TripMember m : members) {
+      UUID memberUuid = m.tripMemberId() == null ? null : UUID.fromString(m.tripMemberId());
+      map.put(m.deviceId(), memberUuid);
+    }
+    return map;
   }
 
   private FxSnapshot snapshotFx(UUID tripId, String currency, BigDecimal amount) {

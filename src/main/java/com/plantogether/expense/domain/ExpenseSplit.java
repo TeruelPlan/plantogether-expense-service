@@ -29,6 +29,9 @@ public class ExpenseSplit {
   @Column(name = "device_id", nullable = false)
   private UUID deviceId;
 
+  @Column(name = "trip_member_id")
+  private UUID tripMemberId;
+
   @Column(name = "share_amount", nullable = false, precision = 19, scale = 4)
   private BigDecimal shareAmount;
 }

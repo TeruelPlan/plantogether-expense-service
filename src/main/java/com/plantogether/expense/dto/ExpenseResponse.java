@@ -22,7 +22,9 @@ public class ExpenseResponse {
 
   private UUID id;
   private UUID tripId;
+  // Legacy field — will be removed in Phase 3.
   private UUID paidByDeviceId;
+  private UUID paidByMemberId;
   private BigDecimal amount;
   private String currency;
   private ExpenseCategory category;
@@ -42,13 +44,14 @@ public class ExpenseResponse {
     List<SplitOutput> splits =
         entity.getSplits().stream()
             .sorted(Comparator.comparing(s -> s.getDeviceId().toString()))
-            .map(s -> new SplitOutput(s.getDeviceId(), s.getShareAmount()))
+            .map(s -> new SplitOutput(s.getDeviceId(), s.getTripMemberId(), s.getShareAmount()))
             .toList();
 
     return ExpenseResponse.builder()
         .id(entity.getId())
         .tripId(entity.getTripId())
         .paidByDeviceId(entity.getPaidBy())
+        .paidByMemberId(entity.getPaidByTripMemberId())
         .amount(entity.getAmount())
         .currency(entity.getCurrency())
         .category(entity.getCategory())
@@ -70,7 +73,9 @@ public class ExpenseResponse {
   @NoArgsConstructor
   @AllArgsConstructor
   public static class SplitOutput {
+    // Legacy field — will be removed in Phase 3.
     private UUID deviceId;
+    private UUID memberId;
     private BigDecimal shareAmount;
   }
 }

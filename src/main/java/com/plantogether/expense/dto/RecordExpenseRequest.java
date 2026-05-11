@@ -44,7 +44,7 @@ public class RecordExpenseRequest {
   @Size(min = 1, message = "splits, if provided, must not be empty")
   private List<SplitInput> splits;
 
-  private UUID paidBy;
+  private UUID paidByMemberId;
 
   @Data
   @Builder
@@ -52,7 +52,7 @@ public class RecordExpenseRequest {
   @AllArgsConstructor
   public static class SplitInput {
 
-    @NotNull private UUID deviceId;
+    @NotNull private UUID memberId;
 
     @NotNull
     @Positive

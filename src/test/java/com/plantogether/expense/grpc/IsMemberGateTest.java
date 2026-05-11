@@ -5,10 +5,8 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.plantogether.common.grpc.InProcessTripClient;
-import com.plantogether.common.grpc.Role;
-import com.plantogether.common.grpc.TripClientTestSupport;
-import com.plantogether.common.grpc.TripMember;
+import com.plantogether.common.grpc.TripClient;
+import com.plantogether.common.grpc.TripGrpcClient;
 import com.plantogether.expense.controller.ExpenseController;
 import com.plantogether.expense.domain.Expense;
 import com.plantogether.expense.domain.RateSource;
@@ -17,10 +15,24 @@ import com.plantogether.expense.fx.ExchangeRateProvider;
 import com.plantogether.expense.fx.ExchangeRateProvider.FxQuote;
 import com.plantogether.expense.repository.ExpenseRepository;
 import com.plantogether.expense.service.ExpenseService;
+import com.plantogether.trip.grpc.GetTripCurrencyRequest;
+import com.plantogether.trip.grpc.GetTripCurrencyResponse;
+import com.plantogether.trip.grpc.GetTripMembersRequest;
+import com.plantogether.trip.grpc.GetTripMembersResponse;
+import com.plantogether.trip.grpc.IsMemberRequest;
+import com.plantogether.trip.grpc.IsMemberResponse;
+import com.plantogether.trip.grpc.TripMemberProto;
+import com.plantogether.trip.grpc.TripServiceGrpc;
+import io.grpc.ManagedChannel;
+import io.grpc.Server;
+import io.grpc.inprocess.InProcessChannelBuilder;
+import io.grpc.inprocess.InProcessServerBuilder;
+import io.grpc.stub.StreamObserver;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,14 +49,19 @@ class IsMemberGateTest {
 
   private static final String DEVICE_ID = UUID.randomUUID().toString();
   private static final UUID TRIP_ID = UUID.randomUUID();
+  // The trip_member_id assigned to the calling device for TRIP_ID. Production resolves the
+  // device id to this member id via requireMembership and uses it as the payer key.
+  private static final UUID CALLER_MEMBER_ID = UUID.randomUUID();
 
-  private InProcessTripClient tripClient;
+  private Server grpcServer;
+  private ManagedChannel grpcChannel;
+  private TripClient tripClient;
   private ExpenseRepository expenseRepository;
   private MockMvc mockMvc;
   private Authentication authentication;
 
   @BeforeEach
-  void setUp() {
+  void setUp() throws Exception {
     expenseRepository = mock(ExpenseRepository.class);
     ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
 
@@ -58,14 +75,17 @@ class IsMemberGateTest {
               return e;
             });
 
-    tripClient =
-        TripClientTestSupport.builder()
-            .member(TRIP_ID.toString(), DEVICE_ID)
-            .withMembers(
-                TRIP_ID.toString(),
-                List.of(new TripMember(UUID.fromString(DEVICE_ID), "Alice", Role.PARTICIPANT)))
-            .withCurrency(TRIP_ID.toString(), "EUR")
-            .build();
+    // Custom in-process gRPC server that populates IsMemberResponse.tripMemberId so that
+    // TripGrpcClient.requireMembership returns a TripMembership with a non-null tripMemberId.
+    String serverName = InProcessServerBuilder.generateName();
+    grpcServer =
+        InProcessServerBuilder.forName(serverName)
+            .directExecutor()
+            .addService(new MemberAwareTripService())
+            .build()
+            .start();
+    grpcChannel = InProcessChannelBuilder.forName(serverName).directExecutor().build();
+    tripClient = new TripGrpcClient(TripServiceGrpc.newBlockingStub(grpcChannel));
 
     ExchangeRateProvider exchangeRateProvider = mock(ExchangeRateProvider.class);
     when(exchangeRateProvider.getRate(any(), any()))
@@ -89,7 +109,8 @@ class IsMemberGateTest {
   @AfterEach
   void tearDown() throws InterruptedException {
     SecurityContextHolder.clearContext();
-    tripClient.close();
+    grpcChannel.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
+    grpcServer.shutdownNow().awaitTermination(5, TimeUnit.SECONDS);
   }
 
   private String validBody() {
@@ -132,5 +153,54 @@ class IsMemberGateTest {
         .andExpect(status().isForbidden());
 
     verify(expenseRepository, never()).save(any(Expense.class));
+  }
+
+  /**
+   * In-process trip-service implementation that knows about exactly one (TRIP_ID, DEVICE_ID,
+   * CALLER_MEMBER_ID) triplet and exposes it via IsMember (with tripMemberId populated) and
+   * GetTripMembers. Other (tripId, deviceId) pairs are reported as non-members.
+   */
+  private static class MemberAwareTripService extends TripServiceGrpc.TripServiceImplBase {
+
+    @Override
+    public void isMember(IsMemberRequest request, StreamObserver<IsMemberResponse> observer) {
+      boolean match =
+          TRIP_ID.toString().equals(request.getTripId()) && DEVICE_ID.equals(request.getDeviceId());
+      IsMemberResponse.Builder b = IsMemberResponse.newBuilder().setIsMember(match);
+      if (match) {
+        b.setRole("PARTICIPANT").setTripMemberId(CALLER_MEMBER_ID.toString());
+      } else {
+        b.setRole("");
+      }
+      observer.onNext(b.build());
+      observer.onCompleted();
+    }
+
+    @Override
+    public void getTripCurrency(
+        GetTripCurrencyRequest request, StreamObserver<GetTripCurrencyResponse> observer) {
+      observer.onNext(GetTripCurrencyResponse.newBuilder().setCurrencyCode("EUR").build());
+      observer.onCompleted();
+    }
+
+    @Override
+    public void getTripMembers(
+        GetTripMembersRequest request, StreamObserver<GetTripMembersResponse> observer) {
+      if (!TRIP_ID.toString().equals(request.getTripId())) {
+        observer.onNext(GetTripMembersResponse.newBuilder().build());
+        observer.onCompleted();
+        return;
+      }
+      observer.onNext(
+          GetTripMembersResponse.newBuilder()
+              .addMembers(
+                  TripMemberProto.newBuilder()
+                      .setDisplayName("Alice")
+                      .setRole("PARTICIPANT")
+                      .setTripMemberId(CALLER_MEMBER_ID.toString())
+                      .build())
+              .build());
+      observer.onCompleted();
+    }
   }
 }

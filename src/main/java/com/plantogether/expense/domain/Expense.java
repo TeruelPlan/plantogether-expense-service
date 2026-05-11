@@ -26,8 +26,8 @@ public class Expense {
   @Column(name = "trip_id", nullable = false)
   private UUID tripId;
 
-  @Column(name = "paid_by", nullable = false)
-  private UUID paidBy;
+  @Column(name = "paid_by_trip_member_id", nullable = false)
+  private UUID paidByTripMemberId;
 
   @Column(name = "amount", nullable = false, precision = 19, scale = 4)
   private BigDecimal amount;

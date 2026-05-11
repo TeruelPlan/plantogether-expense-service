@@ -22,7 +22,7 @@ public class ExpenseResponse {
 
   private UUID id;
   private UUID tripId;
-  private UUID paidByDeviceId;
+  private UUID paidByMemberId;
   private BigDecimal amount;
   private String currency;
   private ExpenseCategory category;
@@ -41,14 +41,14 @@ public class ExpenseResponse {
   public static ExpenseResponse from(Expense entity) {
     List<SplitOutput> splits =
         entity.getSplits().stream()
-            .sorted(Comparator.comparing(s -> s.getDeviceId().toString()))
-            .map(s -> new SplitOutput(s.getDeviceId(), s.getShareAmount()))
+            .sorted(Comparator.comparing(s -> s.getTripMemberId().toString()))
+            .map(s -> new SplitOutput(s.getTripMemberId(), s.getShareAmount()))
             .toList();
 
     return ExpenseResponse.builder()
         .id(entity.getId())
         .tripId(entity.getTripId())
-        .paidByDeviceId(entity.getPaidBy())
+        .paidByMemberId(entity.getPaidByTripMemberId())
         .amount(entity.getAmount())
         .currency(entity.getCurrency())
         .category(entity.getCategory())
@@ -70,7 +70,7 @@ public class ExpenseResponse {
   @NoArgsConstructor
   @AllArgsConstructor
   public static class SplitOutput {
-    private UUID deviceId;
+    private UUID memberId;
     private BigDecimal shareAmount;
   }
 }

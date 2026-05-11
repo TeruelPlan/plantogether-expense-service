@@ -9,6 +9,7 @@ import com.plantogether.common.exception.AccessDeniedException;
 import com.plantogether.common.grpc.Role;
 import com.plantogether.common.grpc.TripClient;
 import com.plantogether.common.grpc.TripMember;
+import com.plantogether.common.grpc.TripMembership;
 import com.plantogether.expense.domain.*;
 import com.plantogether.expense.dto.ExpenseResponse;
 import com.plantogether.expense.dto.RecordExpenseRequest;
@@ -45,6 +46,9 @@ class ExpenseServiceTest {
 
   private static final UUID TRIP_ID = UUID.randomUUID();
   private static final String DEVICE_ID = UUID.randomUUID().toString();
+  // Per-trip member id assigned to the calling device. Used to populate requireMembership stubs
+  // and to identify the payer in trip member lists (memberIds are what production stores now).
+  private static final UUID CALLER_MEMBER_ID = UUID.randomUUID();
 
   @BeforeEach
   void setUp() {
@@ -58,19 +62,23 @@ class ExpenseServiceTest {
         .thenReturn(new FxQuote(new BigDecimal("1.0000"), RateSource.LIVE, Instant.now()));
   }
 
+  private TripMembership participantMembership(UUID memberId) {
+    return new TripMembership(true, Role.PARTICIPANT, memberId.toString());
+  }
+
   @Test
   void record_member_defaultEqualSplit_savesAndPublishesEvent() {
     UUID m1 = UUID.fromString("00000000-0000-0000-0000-000000000001");
     UUID m2 = UUID.fromString("00000000-0000-0000-0000-000000000002");
-    UUID payer = UUID.fromString(DEVICE_ID);
 
-    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(participantMembership(CALLER_MEMBER_ID));
     when(tripClient.getTripMembers(TRIP_ID.toString()))
         .thenReturn(
             List.of(
-                new TripMember(m1, "Alice", Role.PARTICIPANT),
-                new TripMember(m2, "Bob", Role.PARTICIPANT),
-                new TripMember(payer, "Carol", Role.ORGANIZER)));
+                new TripMember("Alice", Role.PARTICIPANT, m1.toString()),
+                new TripMember("Bob", Role.PARTICIPANT, m2.toString()),
+                new TripMember("Carol", Role.ORGANIZER, CALLER_MEMBER_ID.toString())));
     stubFxSameCurrency("EUR");
     when(expenseRepository.save(any(Expense.class)))
         .thenAnswer(
@@ -109,15 +117,16 @@ class ExpenseServiceTest {
     verify(eventPublisher).publishEvent(eventCaptor.capture());
     ExpenseCreatedInternalEvent event = eventCaptor.getValue();
     assertThat(event.tripId()).isEqualTo(TRIP_ID);
-    assertThat(event.paidByDeviceId()).isEqualTo(DEVICE_ID);
+    assertThat(event.paidByMemberId()).isEqualTo(CALLER_MEMBER_ID.toString());
   }
 
   @Test
   void record_member_explicitSplits_passThroughs() {
-    UUID splitDeviceId = UUID.fromString(DEVICE_ID);
-    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    UUID memberId = CALLER_MEMBER_ID;
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(participantMembership(memberId));
     when(tripClient.getTripMembers(TRIP_ID.toString()))
-        .thenReturn(List.of(new TripMember(splitDeviceId, "Alice", Role.PARTICIPANT)));
+        .thenReturn(List.of(new TripMember("Alice", Role.PARTICIPANT, memberId.toString())));
     stubFxSameCurrency("EUR");
     when(expenseRepository.save(any(Expense.class)))
         .thenAnswer(
@@ -136,9 +145,7 @@ class ExpenseServiceTest {
             .category(ExpenseCategory.TRANSPORT)
             .description("Taxi")
             .splitMode(SplitMode.CUSTOM)
-            .splits(
-                List.of(
-                    new RecordExpenseRequest.SplitInput(splitDeviceId, new BigDecimal("50.00"))))
+            .splits(List.of(new RecordExpenseRequest.SplitInput(memberId, new BigDecimal("50.00"))))
             .build();
 
     service.recordExpense(TRIP_ID, DEVICE_ID, req);
@@ -148,7 +155,8 @@ class ExpenseServiceTest {
 
   @Test
   void record_nonMember_throwsAccessDenied() {
-    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(false);
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenThrow(new AccessDeniedException("Unable to verify trip membership"));
 
     RecordExpenseRequest req =
         RecordExpenseRequest.builder()
@@ -167,7 +175,11 @@ class ExpenseServiceTest {
 
   @Test
   void record_splitModeCustomWithoutSplits_throws400() {
-    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(participantMembership(CALLER_MEMBER_ID));
+    when(tripClient.getTripMembers(TRIP_ID.toString()))
+        .thenReturn(
+            List.of(new TripMember("Alice", Role.PARTICIPANT, CALLER_MEMBER_ID.toString())));
 
     RecordExpenseRequest req =
         RecordExpenseRequest.builder()
@@ -213,10 +225,11 @@ class ExpenseServiceTest {
 
   @Test
   void create_sameCurrency_persistsRateOne_sourceLive() {
-    UUID m1 = UUID.fromString(DEVICE_ID);
-    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    UUID memberId = CALLER_MEMBER_ID;
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(participantMembership(memberId));
     when(tripClient.getTripMembers(TRIP_ID.toString()))
-        .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
+        .thenReturn(List.of(new TripMember("Alice", Role.PARTICIPANT, memberId.toString())));
     Instant now = Instant.parse("2026-04-28T10:00:00Z");
     when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
     when(exchangeRateProvider.getRate("EUR", "EUR"))
@@ -251,10 +264,11 @@ class ExpenseServiceTest {
 
   @Test
   void create_foreignCurrency_persistsConvertedAmount_rateSnapshot() {
-    UUID m1 = UUID.fromString(DEVICE_ID);
-    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    UUID memberId = CALLER_MEMBER_ID;
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(participantMembership(memberId));
     when(tripClient.getTripMembers(TRIP_ID.toString()))
-        .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
+        .thenReturn(List.of(new TripMember("Alice", Role.PARTICIPANT, memberId.toString())));
     Instant fetchedAt = Instant.parse("2026-04-28T10:00:00Z");
     when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
     when(exchangeRateProvider.getRate("USD", "EUR"))
@@ -294,10 +308,11 @@ class ExpenseServiceTest {
 
   @Test
   void create_fallbackRate_persistsSourceFALLBACK_withOriginalFetchedAt() {
-    UUID m1 = UUID.fromString(DEVICE_ID);
-    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    UUID memberId = CALLER_MEMBER_ID;
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(participantMembership(memberId));
     when(tripClient.getTripMembers(TRIP_ID.toString()))
-        .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
+        .thenReturn(List.of(new TripMember("Alice", Role.PARTICIPANT, memberId.toString())));
     Instant originalFetch = Instant.parse("2026-04-20T08:00:00Z");
     when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
     when(exchangeRateProvider.getRate("USD", "EUR"))
@@ -329,10 +344,11 @@ class ExpenseServiceTest {
 
   @Test
   void create_rateUnavailable_propagatesException() {
-    UUID m1 = UUID.fromString(DEVICE_ID);
-    when(tripClient.isMember(TRIP_ID.toString(), DEVICE_ID)).thenReturn(true);
+    UUID memberId = CALLER_MEMBER_ID;
+    when(tripClient.requireMembership(TRIP_ID.toString(), DEVICE_ID))
+        .thenReturn(participantMembership(memberId));
     when(tripClient.getTripMembers(TRIP_ID.toString()))
-        .thenReturn(List.of(new TripMember(m1, "Alice", Role.PARTICIPANT)));
+        .thenReturn(List.of(new TripMember("Alice", Role.PARTICIPANT, memberId.toString())));
     when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
     when(exchangeRateProvider.getRate("USD", "EUR"))
         .thenThrow(new ExchangeRateUnavailableException("USD", "EUR"));
@@ -356,7 +372,7 @@ class ExpenseServiceTest {
     return Expense.builder()
         .id(UUID.randomUUID())
         .tripId(tripId)
-        .paidBy(UUID.fromString(DEVICE_ID))
+        .paidByTripMemberId(CALLER_MEMBER_ID)
         .amount(new BigDecimal("10.00"))
         .currency("EUR")
         .category(ExpenseCategory.FOOD)

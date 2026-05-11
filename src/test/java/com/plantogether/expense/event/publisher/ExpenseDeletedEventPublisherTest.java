@@ -38,8 +38,8 @@ class ExpenseDeletedEventPublisherTest {
     ExpenseDeletedEvent event = (ExpenseDeletedEvent) body.getValue();
     assertThat(event.getExpenseId()).isEqualTo(expenseId);
     assertThat(event.getTripId()).isEqualTo(tripId);
-    assertThat(event.getPaidByDeviceId()).isEqualTo(payer);
-    assertThat(event.getDeletedByDeviceId()).isEqualTo(deletedBy);
+    assertThat(event.getPaidByMemberId()).isEqualTo(payer);
+    assertThat(event.getDeletedByMemberId()).isEqualTo(deletedBy);
     assertThat(event.getDeletedAt()).isEqualTo(when);
   }
 }

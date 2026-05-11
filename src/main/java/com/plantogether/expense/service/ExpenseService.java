@@ -23,7 +23,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.*;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -46,14 +45,19 @@ public class ExpenseService {
 
   @Transactional
   public ExpenseResponse recordExpense(UUID tripId, String deviceId, RecordExpenseRequest req) {
-    if (!tripClient.isMember(tripId.toString(), deviceId)) {
-      throw new AccessDeniedException("Not a member of this trip");
+    TripMembership membership;
+    try {
+      membership = tripClient.requireMembership(tripId.toString(), deviceId);
+    } catch (StatusRuntimeException ex) {
+      throw mapGrpcException(ex);
     }
+    UUID callerMemberId = UUID.fromString(membership.tripMemberId());
 
-    Set<UUID> memberIds = loadTripMemberIds(tripId);
+    Set<UUID> memberIds = loadMemberIds(tripId);
 
-    UUID paidBy = req.getPaidBy() != null ? req.getPaidBy() : UUID.fromString(deviceId);
-    if (!memberIds.contains(paidBy)) {
+    UUID paidByMemberId =
+        req.getPaidByMemberId() != null ? req.getPaidByMemberId() : callerMemberId;
+    if (!memberIds.contains(paidByMemberId)) {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST, "paidBy must be a member of the trip");
     }
@@ -68,7 +72,7 @@ public class ExpenseService {
     Expense expense =
         Expense.builder()
             .tripId(tripId)
-            .paidBy(paidBy)
+            .paidByTripMemberId(paidByMemberId)
             .amount(req.getAmount())
             .currency(req.getCurrency())
             .category(req.getCategory())
@@ -90,7 +94,7 @@ public class ExpenseService {
         new ExpenseCreatedInternalEvent(
             saved.getId(),
             saved.getTripId(),
-            saved.getPaidBy().toString(),
+            saved.getPaidByTripMemberId().toString(),
             saved.getAmount(),
             saved.getDescription(),
             saved.getCreatedAt()));
@@ -117,7 +121,7 @@ public class ExpenseService {
 
     assertCanModify(expense, deviceId);
 
-    Set<UUID> memberIds = loadTripMemberIds(expense.getTripId());
+    Set<UUID> memberIds = loadMemberIds(expense.getTripId());
 
     String description = sanitizeDescription(req.getDescription());
     List<ExpenseSplit> newSplits =
@@ -141,8 +145,6 @@ public class ExpenseService {
     newSplits.forEach(expense::addSplit);
 
     Expense saved = expenseRepository.save(expense);
-    // TODO(5.4): @CacheEvict(cacheNames="balance", key="#expense.tripId") once 5.4 introduces
-    //            the Redis balance cache.
     return ExpenseResponse.from(saved);
   }
 
@@ -153,20 +155,18 @@ public class ExpenseService {
             .findByIdAndDeletedAtIsNull(expenseId)
             .orElseThrow(() -> new ResourceNotFoundException("Expense", expenseId));
 
-    assertCanModify(expense, deviceId);
+    TripMembership membership = assertCanModify(expense, deviceId);
 
     Instant deletedAt = Instant.now();
     expense.setDeletedAt(deletedAt);
     expenseRepository.save(expense);
-    // TODO(5.4): @CacheEvict(cacheNames="balance", key="#expense.tripId") once 5.4 introduces
-    //            the Redis balance cache.
 
     eventPublisher.publishEvent(
         new ExpenseDeletedInternalEvent(
             expense.getId(),
             expense.getTripId(),
-            expense.getPaidBy(),
-            UUID.fromString(deviceId),
+            expense.getPaidByTripMemberId(),
+            UUID.fromString(membership.tripMemberId()),
             deletedAt));
   }
 
@@ -176,32 +176,37 @@ public class ExpenseService {
    * former member who happens to be the original payer can no longer mutate the expense after being
    * removed from the trip.
    */
-  private void assertCanModify(Expense expense, String deviceId) {
+  private TripMembership assertCanModify(Expense expense, String deviceId) {
     TripMembership membership;
     try {
       membership = tripClient.requireMembership(expense.getTripId().toString(), deviceId);
     } catch (StatusRuntimeException ex) {
       throw mapGrpcException(ex);
     }
-    boolean isPayer = deviceId.equals(expense.getPaidBy().toString());
+    UUID callerMemberId = UUID.fromString(membership.tripMemberId());
+    boolean isPayer = callerMemberId.equals(expense.getPaidByTripMemberId());
     if (!isPayer && membership.role() != Role.ORGANIZER) {
       throw new AccessDeniedException(
           "Only the payer or the trip organizer can modify this expense");
     }
+    return membership;
   }
 
-  private Set<UUID> loadTripMemberIds(UUID tripId) {
+  private Set<UUID> loadMemberIds(UUID tripId) {
     List<TripMember> members;
     try {
       members = tripClient.getTripMembers(tripId.toString());
     } catch (StatusRuntimeException ex) {
       throw mapGrpcException(ex);
     }
-    Set<UUID> memberIds = members.stream().map(TripMember::deviceId).collect(Collectors.toSet());
-    if (memberIds.isEmpty()) {
+    if (members.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Trip not found or has no members");
     }
-    return memberIds;
+    Set<UUID> ids = new LinkedHashSet<>();
+    for (TripMember m : members) {
+      ids.add(UUID.fromString(m.tripMemberId()));
+    }
+    return ids;
   }
 
   private FxSnapshot snapshotFx(UUID tripId, String currency, BigDecimal amount) {
@@ -281,14 +286,14 @@ public class ExpenseService {
 
     Set<UUID> seen = new HashSet<>();
     for (RecordExpenseRequest.SplitInput s : inputs) {
-      if (!memberIds.contains(s.getDeviceId())) {
+      if (!memberIds.contains(s.getMemberId())) {
         throw new ResponseStatusException(
             HttpStatus.BAD_REQUEST,
-            "splits[] contains a deviceId that is not a member of the trip");
+            "splits[] contains a memberId that is not a member of the trip");
       }
-      if (!seen.add(s.getDeviceId())) {
+      if (!seen.add(s.getMemberId())) {
         throw new ResponseStatusException(
-            HttpStatus.BAD_REQUEST, "splits[] contains duplicate deviceId entries");
+            HttpStatus.BAD_REQUEST, "splits[] contains duplicate memberId entries");
       }
     }
 
@@ -304,7 +309,6 @@ public class ExpenseService {
       return convertPercentagesToShares(inputs, amount);
     }
 
-    // CUSTOM — tolerate ±0.01 (BigDecimal compareTo, never equals)
     BigDecimal sum =
         inputs.stream()
             .map(RecordExpenseRequest.SplitInput::getShareAmount)
@@ -317,7 +321,7 @@ public class ExpenseService {
         .map(
             s ->
                 ExpenseSplit.builder()
-                    .deviceId(s.getDeviceId())
+                    .tripMemberId(s.getMemberId())
                     .shareAmount(s.getShareAmount())
                     .build())
         .toList();
@@ -334,12 +338,12 @@ public class ExpenseService {
               .multiply(s.getShareAmount())
               .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
       accumulated = accumulated.add(share);
-      splits.add(ExpenseSplit.builder().deviceId(s.getDeviceId()).shareAmount(share).build());
+      splits.add(ExpenseSplit.builder().tripMemberId(s.getMemberId()).shareAmount(share).build());
     }
     RecordExpenseRequest.SplitInput last = inputs.getLast();
     splits.add(
         ExpenseSplit.builder()
-            .deviceId(last.getDeviceId())
+            .tripMemberId(last.getMemberId())
             .shareAmount(amount.subtract(accumulated))
             .build());
     return splits;
@@ -357,13 +361,13 @@ public class ExpenseService {
     for (int i = 0; i < n - 1; i++) {
       splits.add(
           ExpenseSplit.builder()
-              .deviceId(UUID.fromString(sorted.get(i)))
+              .tripMemberId(UUID.fromString(sorted.get(i)))
               .shareAmount(each)
               .build());
     }
     splits.add(
         ExpenseSplit.builder()
-            .deviceId(UUID.fromString(sorted.get(n - 1)))
+            .tripMemberId(UUID.fromString(sorted.get(n - 1)))
             .shareAmount(last)
             .build());
     return splits;

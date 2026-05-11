@@ -37,7 +37,7 @@ public class ExpenseEventPublisher {
         ExpenseCreatedEvent.builder()
             .expenseId(internal.expenseId())
             .tripId(internal.tripId())
-            .paidByDeviceId(internal.paidByDeviceId())
+            .paidByMemberId(internal.paidByMemberId())
             .amount(internal.amount())
             .description(internal.description())
             .createdAt(internal.createdAt())
@@ -52,8 +52,8 @@ public class ExpenseEventPublisher {
         ExpenseDeletedEvent.builder()
             .expenseId(internal.expenseId())
             .tripId(internal.tripId())
-            .paidByDeviceId(internal.paidByDeviceId())
-            .deletedByDeviceId(internal.deletedByDeviceId())
+            .paidByMemberId(internal.paidByMemberId())
+            .deletedByMemberId(internal.deletedByMemberId())
             .deletedAt(internal.deletedAt())
             .build();
     publish(
@@ -78,7 +78,7 @@ public class ExpenseEventPublisher {
   public record ExpenseCreatedInternalEvent(
       UUID expenseId,
       UUID tripId,
-      String paidByDeviceId,
+      String paidByMemberId,
       BigDecimal amount,
       String description,
       Instant createdAt) {}
@@ -86,7 +86,7 @@ public class ExpenseEventPublisher {
   public record ExpenseDeletedInternalEvent(
       UUID expenseId,
       UUID tripId,
-      UUID paidByDeviceId,
-      UUID deletedByDeviceId,
+      UUID paidByMemberId,
+      UUID deletedByMemberId,
       Instant deletedAt) {}
 }

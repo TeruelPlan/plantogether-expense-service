@@ -35,12 +35,12 @@ class ExpenseEventPublisherTest {
   void afterCommit_sendsExpenseCreatedEvent_withCorrectRoutingKey() {
     UUID expenseId = UUID.randomUUID();
     UUID tripId = UUID.randomUUID();
-    String deviceId = UUID.randomUUID().toString();
+    String memberId = UUID.randomUUID().toString();
     Instant now = Instant.now();
 
     ExpenseCreatedInternalEvent internal =
         new ExpenseCreatedInternalEvent(
-            expenseId, tripId, deviceId, new BigDecimal("99.99"), "Dinner", now);
+            expenseId, tripId, memberId, new BigDecimal("99.99"), "Dinner", now);
 
     publisher.publishExpenseCreated(internal);
 
@@ -58,8 +58,8 @@ class ExpenseEventPublisherTest {
     ExpenseCreatedEvent event = (ExpenseCreatedEvent) messageCaptor.getValue();
     assertThat(event.getExpenseId()).isEqualTo(expenseId);
     assertThat(event.getTripId()).isEqualTo(tripId);
-    assertThat(event.getPaidByDeviceId()).isEqualTo(deviceId);
-    assertThat(event.getPaidByDeviceId()).isInstanceOf(String.class);
+    assertThat(event.getPaidByMemberId()).isEqualTo(memberId);
+    assertThat(event.getPaidByMemberId()).isInstanceOf(String.class);
     assertThat(event.getAmount()).isEqualByComparingTo(new BigDecimal("99.99"));
   }
 }

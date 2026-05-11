@@ -26,10 +26,7 @@ public class ExpenseSplit {
   @EqualsAndHashCode.Exclude
   private Expense expense;
 
-  @Column(name = "device_id", nullable = false)
-  private UUID deviceId;
-
-  @Column(name = "trip_member_id")
+  @Column(name = "trip_member_id", nullable = false)
   private UUID tripMemberId;
 
   @Column(name = "share_amount", nullable = false, precision = 19, scale = 4)

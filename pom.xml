@@ -22,7 +22,7 @@
         <tag>HEAD</tag>
     </scm>
     <properties>
-        <plantogether-bom.version>1.8.0-SNAPSHOT</plantogether-bom.version>
+        <plantogether-bom.version>2.0.0-SNAPSHOT</plantogether-bom.version>
     </properties>
 
 

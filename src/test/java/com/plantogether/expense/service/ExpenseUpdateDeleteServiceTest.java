@@ -44,9 +44,15 @@ class ExpenseUpdateDeleteServiceTest {
   private ExpenseService service;
 
   private static final UUID TRIP_ID = UUID.randomUUID();
-  private static final UUID PAYER_ID = UUID.randomUUID();
+  // Each "actor" has both a device id (caller's X-Device-Id) and a trip_member_id (the per-trip
+  // membership row id). The membership gate now resolves the device id into a member id which is
+  // what production stores and compares against expense.paidByTripMemberId.
+  private static final String PAYER_DEVICE_ID = UUID.randomUUID().toString();
+  private static final UUID PAYER_MEMBER_ID = UUID.randomUUID();
+  private static final String OTHER_DEVICE_ID = UUID.randomUUID().toString();
   private static final UUID OTHER_MEMBER_ID = UUID.randomUUID();
-  private static final UUID ORGANIZER_ID = UUID.randomUUID();
+  private static final String ORGANIZER_DEVICE_ID = UUID.randomUUID().toString();
+  private static final UUID ORGANIZER_MEMBER_ID = UUID.randomUUID();
   private static final UUID EXPENSE_ID = UUID.randomUUID();
 
   @BeforeEach
@@ -60,7 +66,7 @@ class ExpenseUpdateDeleteServiceTest {
         Expense.builder()
             .id(EXPENSE_ID)
             .tripId(TRIP_ID)
-            .paidBy(PAYER_ID)
+            .paidByTripMemberId(PAYER_MEMBER_ID)
             .amount(new BigDecimal("60.00"))
             .currency("EUR")
             .category(ExpenseCategory.FOOD)
@@ -76,14 +82,20 @@ class ExpenseUpdateDeleteServiceTest {
             .splits(new ArrayList<>())
             .build();
     e.addSplit(
-        ExpenseSplit.builder().deviceId(PAYER_ID).shareAmount(new BigDecimal("20.00")).build());
-    e.addSplit(
         ExpenseSplit.builder()
-            .deviceId(OTHER_MEMBER_ID)
+            .tripMemberId(PAYER_MEMBER_ID)
             .shareAmount(new BigDecimal("20.00"))
             .build());
     e.addSplit(
-        ExpenseSplit.builder().deviceId(ORGANIZER_ID).shareAmount(new BigDecimal("20.00")).build());
+        ExpenseSplit.builder()
+            .tripMemberId(OTHER_MEMBER_ID)
+            .shareAmount(new BigDecimal("20.00"))
+            .build());
+    e.addSplit(
+        ExpenseSplit.builder()
+            .tripMemberId(ORGANIZER_MEMBER_ID)
+            .shareAmount(new BigDecimal("20.00"))
+            .build());
     return e;
   }
 
@@ -101,9 +113,9 @@ class ExpenseUpdateDeleteServiceTest {
     when(tripClient.getTripMembers(TRIP_ID.toString()))
         .thenReturn(
             List.of(
-                new TripMember(PAYER_ID, "Payer", Role.PARTICIPANT),
-                new TripMember(OTHER_MEMBER_ID, "Other", Role.PARTICIPANT),
-                new TripMember(ORGANIZER_ID, "Org", Role.ORGANIZER)));
+                new TripMember("Payer", Role.PARTICIPANT, PAYER_MEMBER_ID.toString()),
+                new TripMember("Other", Role.PARTICIPANT, OTHER_MEMBER_ID.toString()),
+                new TripMember("Org", Role.ORGANIZER, ORGANIZER_MEMBER_ID.toString())));
     when(tripClient.getTripCurrency(TRIP_ID.toString())).thenReturn("EUR");
     when(exchangeRateProvider.getRate("EUR", "EUR"))
         .thenReturn(new FxQuote(new BigDecimal("1.0000"), RateSource.LIVE, Instant.now()));
@@ -115,28 +127,28 @@ class ExpenseUpdateDeleteServiceTest {
   void update_byPayer_savesAndReturnsResponse() {
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID))
         .thenReturn(Optional.of(existingExpense()));
-    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_ID.toString()))
-        .thenReturn(new TripMembership(true, Role.PARTICIPANT));
+    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, PAYER_MEMBER_ID.toString()));
     stubMembersAndFx();
     when(expenseRepository.save(any(Expense.class))).thenAnswer(inv -> inv.getArgument(0));
 
-    ExpenseResponse resp = service.updateExpense(EXPENSE_ID, PAYER_ID.toString(), validUpdate());
+    ExpenseResponse resp = service.updateExpense(EXPENSE_ID, PAYER_DEVICE_ID, validUpdate());
 
     assertThat(resp.getAmount()).isEqualByComparingTo("90.00");
     assertThat(resp.getDescription()).isEqualTo("New description");
     assertThat(resp.getCategory()).isEqualTo(ExpenseCategory.ACCOMMODATION);
     // Membership gate is now mandatory even for the payer (former-member regression guard).
-    verify(tripClient).requireMembership(TRIP_ID.toString(), PAYER_ID.toString());
+    verify(tripClient).requireMembership(TRIP_ID.toString(), PAYER_DEVICE_ID);
   }
 
   @Test
   void update_byFormerPayerRemovedFromTrip_throwsAccessDenied() {
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID))
         .thenReturn(Optional.of(existingExpense()));
-    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_ID.toString()))
+    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_DEVICE_ID))
         .thenThrow(new AccessDeniedException("Unable to verify trip membership"));
 
-    assertThatThrownBy(() -> service.updateExpense(EXPENSE_ID, PAYER_ID.toString(), validUpdate()))
+    assertThatThrownBy(() -> service.updateExpense(EXPENSE_ID, PAYER_DEVICE_ID, validUpdate()))
         .isInstanceOf(AccessDeniedException.class);
 
     verify(expenseRepository, never()).save(any());
@@ -146,13 +158,12 @@ class ExpenseUpdateDeleteServiceTest {
   void update_byOrganizer_savesAndReturnsResponse() {
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID))
         .thenReturn(Optional.of(existingExpense()));
-    when(tripClient.requireMembership(TRIP_ID.toString(), ORGANIZER_ID.toString()))
-        .thenReturn(new TripMembership(true, Role.ORGANIZER));
+    when(tripClient.requireMembership(TRIP_ID.toString(), ORGANIZER_DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.ORGANIZER, ORGANIZER_MEMBER_ID.toString()));
     stubMembersAndFx();
     when(expenseRepository.save(any(Expense.class))).thenAnswer(inv -> inv.getArgument(0));
 
-    ExpenseResponse resp =
-        service.updateExpense(EXPENSE_ID, ORGANIZER_ID.toString(), validUpdate());
+    ExpenseResponse resp = service.updateExpense(EXPENSE_ID, ORGANIZER_DEVICE_ID, validUpdate());
 
     assertThat(resp.getDescription()).isEqualTo("New description");
   }
@@ -161,11 +172,10 @@ class ExpenseUpdateDeleteServiceTest {
   void update_byOtherMemberNotOrganizer_throwsAccessDenied() {
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID))
         .thenReturn(Optional.of(existingExpense()));
-    when(tripClient.requireMembership(TRIP_ID.toString(), OTHER_MEMBER_ID.toString()))
-        .thenReturn(new TripMembership(true, Role.PARTICIPANT));
+    when(tripClient.requireMembership(TRIP_ID.toString(), OTHER_DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, OTHER_MEMBER_ID.toString()));
 
-    assertThatThrownBy(
-            () -> service.updateExpense(EXPENSE_ID, OTHER_MEMBER_ID.toString(), validUpdate()))
+    assertThatThrownBy(() -> service.updateExpense(EXPENSE_ID, OTHER_DEVICE_ID, validUpdate()))
         .isInstanceOf(AccessDeniedException.class);
 
     verify(expenseRepository, never()).save(any());
@@ -187,7 +197,7 @@ class ExpenseUpdateDeleteServiceTest {
   void update_missingOrSoftDeleted_throwsResourceNotFound() {
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID)).thenReturn(Optional.empty());
 
-    assertThatThrownBy(() -> service.updateExpense(EXPENSE_ID, PAYER_ID.toString(), validUpdate()))
+    assertThatThrownBy(() -> service.updateExpense(EXPENSE_ID, PAYER_DEVICE_ID, validUpdate()))
         .isInstanceOf(ResourceNotFoundException.class);
   }
 
@@ -195,12 +205,14 @@ class ExpenseUpdateDeleteServiceTest {
   void update_customSplitsMustSumToAmount() {
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID))
         .thenReturn(Optional.of(existingExpense()));
+    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, PAYER_MEMBER_ID.toString()));
     when(tripClient.getTripMembers(TRIP_ID.toString()))
         .thenReturn(
             List.of(
-                new TripMember(PAYER_ID, "Payer", Role.PARTICIPANT),
-                new TripMember(OTHER_MEMBER_ID, "Other", Role.PARTICIPANT),
-                new TripMember(ORGANIZER_ID, "Org", Role.ORGANIZER)));
+                new TripMember("Payer", Role.PARTICIPANT, PAYER_MEMBER_ID.toString()),
+                new TripMember("Other", Role.PARTICIPANT, OTHER_MEMBER_ID.toString()),
+                new TripMember("Org", Role.ORGANIZER, ORGANIZER_MEMBER_ID.toString())));
 
     UpdateExpenseRequest bad =
         UpdateExpenseRequest.builder()
@@ -212,16 +224,16 @@ class ExpenseUpdateDeleteServiceTest {
             .splits(
                 List.of(
                     RecordExpenseRequest.SplitInput.builder()
-                        .deviceId(PAYER_ID)
+                        .memberId(PAYER_MEMBER_ID)
                         .shareAmount(new BigDecimal("10.00"))
                         .build(),
                     RecordExpenseRequest.SplitInput.builder()
-                        .deviceId(OTHER_MEMBER_ID)
+                        .memberId(OTHER_MEMBER_ID)
                         .shareAmount(new BigDecimal("10.00"))
                         .build()))
             .build();
 
-    assertThatThrownBy(() -> service.updateExpense(EXPENSE_ID, PAYER_ID.toString(), bad))
+    assertThatThrownBy(() -> service.updateExpense(EXPENSE_ID, PAYER_DEVICE_ID, bad))
         .hasMessageContaining("CUSTOM splits must sum to amount");
   }
 
@@ -231,10 +243,10 @@ class ExpenseUpdateDeleteServiceTest {
   void delete_byPayer_softDeletesAndPublishesEvent() {
     Expense expense = existingExpense();
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID)).thenReturn(Optional.of(expense));
-    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_ID.toString()))
-        .thenReturn(new TripMembership(true, Role.PARTICIPANT));
+    when(tripClient.requireMembership(TRIP_ID.toString(), PAYER_DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, PAYER_MEMBER_ID.toString()));
 
-    service.deleteExpense(EXPENSE_ID, PAYER_ID.toString());
+    service.deleteExpense(EXPENSE_ID, PAYER_DEVICE_ID);
 
     assertThat(expense.getDeletedAt()).isNotNull();
     verify(expenseRepository).save(expense);
@@ -244,18 +256,18 @@ class ExpenseUpdateDeleteServiceTest {
     verify(eventPublisher).publishEvent(evt.capture());
     assertThat(evt.getValue().expenseId()).isEqualTo(EXPENSE_ID);
     assertThat(evt.getValue().tripId()).isEqualTo(TRIP_ID);
-    assertThat(evt.getValue().paidByDeviceId()).isEqualTo(PAYER_ID);
-    assertThat(evt.getValue().deletedByDeviceId()).isEqualTo(PAYER_ID);
+    assertThat(evt.getValue().paidByMemberId()).isEqualTo(PAYER_MEMBER_ID);
+    assertThat(evt.getValue().deletedByMemberId()).isEqualTo(PAYER_MEMBER_ID);
   }
 
   @Test
   void delete_byOrganizer_softDeletes() {
     Expense expense = existingExpense();
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID)).thenReturn(Optional.of(expense));
-    when(tripClient.requireMembership(TRIP_ID.toString(), ORGANIZER_ID.toString()))
-        .thenReturn(new TripMembership(true, Role.ORGANIZER));
+    when(tripClient.requireMembership(TRIP_ID.toString(), ORGANIZER_DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.ORGANIZER, ORGANIZER_MEMBER_ID.toString()));
 
-    service.deleteExpense(EXPENSE_ID, ORGANIZER_ID.toString());
+    service.deleteExpense(EXPENSE_ID, ORGANIZER_DEVICE_ID);
 
     assertThat(expense.getDeletedAt()).isNotNull();
   }
@@ -264,10 +276,10 @@ class ExpenseUpdateDeleteServiceTest {
   void delete_byOtherMember_throwsAccessDenied() {
     Expense expense = existingExpense();
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID)).thenReturn(Optional.of(expense));
-    when(tripClient.requireMembership(TRIP_ID.toString(), OTHER_MEMBER_ID.toString()))
-        .thenReturn(new TripMembership(true, Role.PARTICIPANT));
+    when(tripClient.requireMembership(TRIP_ID.toString(), OTHER_DEVICE_ID))
+        .thenReturn(new TripMembership(true, Role.PARTICIPANT, OTHER_MEMBER_ID.toString()));
 
-    assertThatThrownBy(() -> service.deleteExpense(EXPENSE_ID, OTHER_MEMBER_ID.toString()))
+    assertThatThrownBy(() -> service.deleteExpense(EXPENSE_ID, OTHER_DEVICE_ID))
         .isInstanceOf(AccessDeniedException.class);
 
     assertThat(expense.getDeletedAt()).isNull();
@@ -278,7 +290,7 @@ class ExpenseUpdateDeleteServiceTest {
   void delete_alreadyDeleted_throwsResourceNotFound() {
     when(expenseRepository.findByIdAndDeletedAtIsNull(EXPENSE_ID)).thenReturn(Optional.empty());
 
-    assertThatThrownBy(() -> service.deleteExpense(EXPENSE_ID, PAYER_ID.toString()))
+    assertThatThrownBy(() -> service.deleteExpense(EXPENSE_ID, PAYER_DEVICE_ID))
         .isInstanceOf(ResourceNotFoundException.class);
 
     verify(eventPublisher, never()).publishEvent(any());

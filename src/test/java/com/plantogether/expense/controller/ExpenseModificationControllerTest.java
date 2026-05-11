@@ -70,7 +70,7 @@ class ExpenseModificationControllerTest {
     return ExpenseResponse.builder()
         .id(expenseId)
         .tripId(tripId)
-        .paidByDeviceId(deviceId)
+        .paidByMemberId(deviceId)
         .amount(new BigDecimal("90.00"))
         .currency("EUR")
         .category(ExpenseCategory.FOOD)

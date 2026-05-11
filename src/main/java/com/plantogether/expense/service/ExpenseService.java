@@ -45,16 +45,19 @@ public class ExpenseService {
 
   @Transactional
   public ExpenseResponse recordExpense(UUID tripId, String deviceId, RecordExpenseRequest req) {
-    if (!tripClient.isMember(tripId.toString(), deviceId)) {
-      throw new AccessDeniedException("Not a member of this trip");
+    TripMembership membership;
+    try {
+      membership = tripClient.requireMembership(tripId.toString(), deviceId);
+    } catch (StatusRuntimeException ex) {
+      throw mapGrpcException(ex);
     }
+    UUID callerMemberId = UUID.fromString(membership.tripMemberId());
 
-    java.util.Map<UUID, UUID> deviceToMember = loadTripMembers(tripId);
-    Set<UUID> memberIds = deviceToMember.keySet();
+    Set<UUID> memberIds = loadMemberIds(tripId);
 
-    UUID rawPaidBy = req.getPaidBy() != null ? req.getPaidBy() : UUID.fromString(deviceId);
-    UUID paidBy = resolveToDeviceId(rawPaidBy, deviceToMember);
-    if (paidBy == null || !memberIds.contains(paidBy)) {
+    UUID paidByMemberId =
+        req.getPaidByMemberId() != null ? req.getPaidByMemberId() : callerMemberId;
+    if (!memberIds.contains(paidByMemberId)) {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST, "paidBy must be a member of the trip");
     }
@@ -63,15 +66,13 @@ public class ExpenseService {
 
     List<ExpenseSplit> splits =
         resolveSplits(req.getAmount(), req.getSplitMode(), req.getSplits(), memberIds);
-    splits.forEach(s -> s.setTripMemberId(deviceToMember.get(s.getDeviceId())));
 
     FxSnapshot fx = snapshotFx(tripId, req.getCurrency(), req.getAmount());
 
     Expense expense =
         Expense.builder()
             .tripId(tripId)
-            .paidBy(paidBy)
-            .paidByTripMemberId(deviceToMember.get(paidBy))
+            .paidByTripMemberId(paidByMemberId)
             .amount(req.getAmount())
             .currency(req.getCurrency())
             .category(req.getCategory())
@@ -93,7 +94,7 @@ public class ExpenseService {
         new ExpenseCreatedInternalEvent(
             saved.getId(),
             saved.getTripId(),
-            saved.getPaidBy().toString(),
+            saved.getPaidByTripMemberId().toString(),
             saved.getAmount(),
             saved.getDescription(),
             saved.getCreatedAt()));
@@ -120,16 +121,11 @@ public class ExpenseService {
 
     assertCanModify(expense, deviceId);
 
-    java.util.Map<UUID, UUID> deviceToMember = loadTripMembers(expense.getTripId());
-    Set<UUID> memberIds = deviceToMember.keySet();
+    Set<UUID> memberIds = loadMemberIds(expense.getTripId());
 
     String description = sanitizeDescription(req.getDescription());
     List<ExpenseSplit> newSplits =
         resolveSplits(req.getAmount(), req.getSplitMode(), req.getSplits(), memberIds);
-    newSplits.forEach(s -> s.setTripMemberId(deviceToMember.get(s.getDeviceId())));
-    if (expense.getPaidByTripMemberId() == null) {
-      expense.setPaidByTripMemberId(deviceToMember.get(expense.getPaidBy()));
-    }
 
     FxSnapshot fx = snapshotFx(expense.getTripId(), req.getCurrency(), req.getAmount());
 
@@ -149,8 +145,6 @@ public class ExpenseService {
     newSplits.forEach(expense::addSplit);
 
     Expense saved = expenseRepository.save(expense);
-    // TODO(5.4): @CacheEvict(cacheNames="balance", key="#expense.tripId") once 5.4 introduces
-    //            the Redis balance cache.
     return ExpenseResponse.from(saved);
   }
 
@@ -161,20 +155,18 @@ public class ExpenseService {
             .findByIdAndDeletedAtIsNull(expenseId)
             .orElseThrow(() -> new ResourceNotFoundException("Expense", expenseId));
 
-    assertCanModify(expense, deviceId);
+    TripMembership membership = assertCanModify(expense, deviceId);
 
     Instant deletedAt = Instant.now();
     expense.setDeletedAt(deletedAt);
     expenseRepository.save(expense);
-    // TODO(5.4): @CacheEvict(cacheNames="balance", key="#expense.tripId") once 5.4 introduces
-    //            the Redis balance cache.
 
     eventPublisher.publishEvent(
         new ExpenseDeletedInternalEvent(
             expense.getId(),
             expense.getTripId(),
-            expense.getPaidBy(),
-            UUID.fromString(deviceId),
+            expense.getPaidByTripMemberId(),
+            UUID.fromString(membership.tripMemberId()),
             deletedAt));
   }
 
@@ -184,51 +176,23 @@ public class ExpenseService {
    * former member who happens to be the original payer can no longer mutate the expense after being
    * removed from the trip.
    */
-  private void assertCanModify(Expense expense, String deviceId) {
+  private TripMembership assertCanModify(Expense expense, String deviceId) {
     TripMembership membership;
     try {
       membership = tripClient.requireMembership(expense.getTripId().toString(), deviceId);
     } catch (StatusRuntimeException ex) {
       throw mapGrpcException(ex);
     }
-    boolean isPayer = deviceId.equals(expense.getPaidBy().toString());
+    UUID callerMemberId = UUID.fromString(membership.tripMemberId());
+    boolean isPayer = callerMemberId.equals(expense.getPaidByTripMemberId());
     if (!isPayer && membership.role() != Role.ORGANIZER) {
       throw new AccessDeniedException(
           "Only the payer or the trip organizer can modify this expense");
     }
+    return membership;
   }
 
-  private Set<UUID> loadTripMemberIds(UUID tripId) {
-    return loadTripMembers(tripId).keySet();
-  }
-
-  /**
-   * Resolves an identifier that may be either a device UUID or a trip_member_id back to its device
-   * UUID. Returns the input unchanged if it already matches a known device UUID; otherwise looks it
-   * up by trip_member_id. Returns {@code null} when neither match. This bridges the Phase 2
-   * transition where Flutter sends a {@code trip_member_id} as {@code paidBy} while persistence
-   * still keys on device UUID.
-   */
-  private UUID resolveToDeviceId(UUID candidate, java.util.Map<UUID, UUID> deviceToMember) {
-    if (candidate == null) {
-      return null;
-    }
-    if (deviceToMember.containsKey(candidate)) {
-      return candidate;
-    }
-    for (java.util.Map.Entry<UUID, UUID> e : deviceToMember.entrySet()) {
-      if (candidate.equals(e.getValue())) {
-        return e.getKey();
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Returns a map keyed by device UUID mapping to the trip_member_id (UUID) for that device, or
-   * {@code null} when the trip-service has not yet populated the trip_member_id field.
-   */
-  private java.util.Map<UUID, UUID> loadTripMembers(UUID tripId) {
+  private Set<UUID> loadMemberIds(UUID tripId) {
     List<TripMember> members;
     try {
       members = tripClient.getTripMembers(tripId.toString());
@@ -238,12 +202,11 @@ public class ExpenseService {
     if (members.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Trip not found or has no members");
     }
-    java.util.Map<UUID, UUID> map = new java.util.LinkedHashMap<>();
+    Set<UUID> ids = new LinkedHashSet<>();
     for (TripMember m : members) {
-      UUID memberUuid = m.tripMemberId() == null ? null : UUID.fromString(m.tripMemberId());
-      map.put(m.deviceId(), memberUuid);
+      ids.add(UUID.fromString(m.tripMemberId()));
     }
-    return map;
+    return ids;
   }
 
   private FxSnapshot snapshotFx(UUID tripId, String currency, BigDecimal amount) {
@@ -323,14 +286,14 @@ public class ExpenseService {
 
     Set<UUID> seen = new HashSet<>();
     for (RecordExpenseRequest.SplitInput s : inputs) {
-      if (!memberIds.contains(s.getDeviceId())) {
+      if (!memberIds.contains(s.getMemberId())) {
         throw new ResponseStatusException(
             HttpStatus.BAD_REQUEST,
-            "splits[] contains a deviceId that is not a member of the trip");
+            "splits[] contains a memberId that is not a member of the trip");
       }
-      if (!seen.add(s.getDeviceId())) {
+      if (!seen.add(s.getMemberId())) {
         throw new ResponseStatusException(
-            HttpStatus.BAD_REQUEST, "splits[] contains duplicate deviceId entries");
+            HttpStatus.BAD_REQUEST, "splits[] contains duplicate memberId entries");
       }
     }
 
@@ -346,7 +309,6 @@ public class ExpenseService {
       return convertPercentagesToShares(inputs, amount);
     }
 
-    // CUSTOM — tolerate ±0.01 (BigDecimal compareTo, never equals)
     BigDecimal sum =
         inputs.stream()
             .map(RecordExpenseRequest.SplitInput::getShareAmount)
@@ -359,7 +321,7 @@ public class ExpenseService {
         .map(
             s ->
                 ExpenseSplit.builder()
-                    .deviceId(s.getDeviceId())
+                    .tripMemberId(s.getMemberId())
                     .shareAmount(s.getShareAmount())
                     .build())
         .toList();
@@ -376,12 +338,12 @@ public class ExpenseService {
               .multiply(s.getShareAmount())
               .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
       accumulated = accumulated.add(share);
-      splits.add(ExpenseSplit.builder().deviceId(s.getDeviceId()).shareAmount(share).build());
+      splits.add(ExpenseSplit.builder().tripMemberId(s.getMemberId()).shareAmount(share).build());
     }
     RecordExpenseRequest.SplitInput last = inputs.getLast();
     splits.add(
         ExpenseSplit.builder()
-            .deviceId(last.getDeviceId())
+            .tripMemberId(last.getMemberId())
             .shareAmount(amount.subtract(accumulated))
             .build());
     return splits;
@@ -399,13 +361,13 @@ public class ExpenseService {
     for (int i = 0; i < n - 1; i++) {
       splits.add(
           ExpenseSplit.builder()
-              .deviceId(UUID.fromString(sorted.get(i)))
+              .tripMemberId(UUID.fromString(sorted.get(i)))
               .shareAmount(each)
               .build());
     }
     splits.add(
         ExpenseSplit.builder()
-            .deviceId(UUID.fromString(sorted.get(n - 1)))
+            .tripMemberId(UUID.fromString(sorted.get(n - 1)))
             .shareAmount(last)
             .build());
     return splits;

@@ -39,19 +39,22 @@ class BalanceCalculatorTest {
   }
 
   @Test
-  @DisplayName("compute returns zero transfers when an even split nets everyone to zero")
-  void compute_allEvenSplit_returnsZeroTransfers() {
-    // Alice pays 60 for 3 people, each owes 20 (incl. Alice) -> all net to zero.
-    ConvertedExpense expense =
+  @DisplayName("compute returns zero transfers when reciprocal expenses net everyone to zero")
+  void compute_reciprocalExpenses_returnsZeroTransfers() {
+    // A pays 40 split 20/20 with B, and B pays 40 split 20/20 with A.
+    // Net: A = +40 -20 -20 = 0; B = +40 -20 -20 = 0 -> nobody owes anybody.
+    ConvertedExpense paidByA =
         new ConvertedExpense(
             A,
-            new BigDecimal("60.00"),
-            List.of(
-                new Split(A, new BigDecimal("20.00")),
-                new Split(B, new BigDecimal("20.00")),
-                new Split(C, new BigDecimal("20.00"))));
+            new BigDecimal("40.00"),
+            List.of(new Split(A, new BigDecimal("20.00")), new Split(B, new BigDecimal("20.00"))));
+    ConvertedExpense paidByB =
+        new ConvertedExpense(
+            B,
+            new BigDecimal("40.00"),
+            List.of(new Split(A, new BigDecimal("20.00")), new Split(B, new BigDecimal("20.00"))));
 
-    BalanceResult result = calculator.compute(List.of(expense), Set.of(A, B, C), EUR);
+    BalanceResult result = calculator.compute(List.of(paidByA, paidByB), Set.of(A, B), EUR);
 
     assertThat(result.transfers()).isEmpty();
   }

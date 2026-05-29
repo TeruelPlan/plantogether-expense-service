@@ -32,6 +32,9 @@ public class BalanceResponse {
   /** Minimal transfer list produced by the greedy algorithm. */
   private List<SettlementTransferDto> settlements;
 
+  /** True when every computed transfer is DONE, or there were no transfers to begin with. */
+  private boolean allSettled;
+
   /** When the snapshot was computed (for client staleness display). */
   private Instant computedAt;
 }

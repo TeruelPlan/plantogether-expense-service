@@ -11,13 +11,12 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
- * Invalidates the cached settlement balance whenever an expense changes.
+ * Invalidates the cached settlement balance and category breakdown whenever an expense changes.
  *
  * <p>Observes the same internal Spring application events fired by {@link
  * com.plantogether.expense.event.publisher.ExpenseEventPublisher}, running on {@code AFTER_COMMIT}
- * so the eviction never executes for a rolled-back write. This listener is the SOLE owner of
- * balance cache invalidation; later stories layer RabbitMQ publishing on top of the same events
- * without re-implementing eviction.
+ * so the eviction never executes for a rolled-back write. This listener is the SOLE owner of these
+ * caches' invalidation.
  *
  * <p>Note: the edit path (story 5.3) re-emits an {@link ExpenseCreatedInternalEvent} rather than a
  * dedicated update event, so it is covered here without a separate listener method.
@@ -27,7 +26,8 @@ import org.springframework.transaction.event.TransactionalEventListener;
 @RequiredArgsConstructor
 public class ExpenseChangedListener {
 
-  private static final String CACHE_KEY_PREFIX = "balance:";
+  private static final String BALANCE_KEY_PREFIX = "balance:";
+  private static final String BREAKDOWN_KEY_PREFIX = "breakdown:";
 
   private final StringRedisTemplate redisTemplate;
 
@@ -42,7 +42,8 @@ public class ExpenseChangedListener {
   }
 
   private void evict(UUID tripId) {
-    redisTemplate.delete(CACHE_KEY_PREFIX + tripId);
-    log.debug("Invalidated cached balance for trip {}", tripId);
+    redisTemplate.delete(BALANCE_KEY_PREFIX + tripId);
+    redisTemplate.delete(BREAKDOWN_KEY_PREFIX + tripId);
+    log.debug("Invalidated cached balance and breakdown for trip {}", tripId);
   }
 }
